@@ -1,0 +1,2135 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DigiRes — Smart Restaurant Billing &amp; QR Ordering Platform</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .receipt-paper {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: repeating-linear-gradient(180deg, #ffffff 0px, #ffffff 24px, #f8fafc 25px);
+    }
+    @media print {
+      @page { size: 58mm auto; margin: 2mm; }
+      body * { visibility: hidden; }
+      #receiptPrintArea, #receiptPrintArea * { visibility: visible; }
+      #receiptPrintArea { position: absolute; left: 0; top: 0; width: 54mm; font-size: 11px; border: none !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased selection:bg-emerald-200 selection:text-emerald-950">
+
+  <!-- Toast Notification -->
+  <div id="toast" class="fixed bottom-5 right-5 z-50 hidden max-w-sm rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white shadow-2xl">
+    <div class="flex items-center gap-2.5">
+      <i data-lucide="check-circle-2" class="h-5 w-5 shrink-0 text-emerald-400"></i>
+      <span id="toastMsg">Done</span>
+    </div>
+  </div>
+
+  <!-- Top Navigation Bar (Hidden automatically when customer scans ?table=N) -->
+  <header id="mainHeader" class="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+    <div class="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
+      <button type="button" data-nav-view="landing" class="flex items-center gap-2 text-left focus:outline-none">
+        <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-[#0a4720] text-white shadow-sm">
+          <i data-lucide="utensils-crossed" class="h-5 w-5 text-amber-400"></i>
+        </div>
+        <div>
+          <span class="text-xl font-black tracking-tight text-[#0f6b30]">Digi<span class="text-amber-500">Res</span></span>
+          <span class="hidden text-[11px] font-semibold text-slate-400 sm:block">Smart Billing &amp; QR System</span>
+        </div>
+      </button>
+
+      <nav class="hidden items-center gap-1.5 rounded-xl bg-slate-100 p-1 lg:flex">
+        <button type="button" data-nav-view="landing" class="nav-pill rounded-lg px-3 py-1.5 text-xs font-bold transition">Home</button>
+        <button type="button" data-nav-view="customer" class="nav-pill rounded-lg px-3 py-1.5 text-xs font-bold transition">Customer QR &amp; Code</button>
+        <button type="button" data-nav-view="kitchen" class="nav-pill rounded-lg px-3 py-1.5 text-xs font-bold transition">Kitchen Display</button>
+        <button type="button" data-nav-view="owner" class="nav-pill rounded-lg px-3 py-1.5 text-xs font-bold transition">Owner Dashboard</button>
+        <button type="button" data-nav-view="admin" class="nav-pill rounded-lg px-3 py-1.5 text-xs font-bold transition">Admin Panel</button>
+      </nav>
+
+      <div class="flex items-center gap-2">
+        <span id="authBadge" class="hidden rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800 sm:inline-block"></span>
+        <button id="openLoginBtn" type="button" class="rounded-xl bg-[#0f6b30] px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-[#0a4720]">
+          Login / Subscribe
+        </button>
+        <button id="logoutBtn" type="button" class="hidden rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100">
+          Logout
+        </button>
+        <button id="mobileMenuBtn" type="button" aria-label="Menu" class="rounded-lg border border-slate-200 p-2 text-slate-700 lg:hidden">
+          <i data-lucide="menu" class="h-4 w-4"></i>
+        </button>
+      </div>
+    </div>
+
+    <div id="mobileNav" class="hidden border-t border-slate-100 bg-white px-4 py-2 lg:hidden">
+      <div class="grid grid-cols-2 gap-1.5 py-1">
+        <button type="button" data-nav-view="landing" class="nav-pill rounded-lg px-3 py-2 text-left text-xs font-bold">Home</button>
+        <button type="button" data-nav-view="customer" class="nav-pill rounded-lg px-3 py-2 text-left text-xs font-bold">Customer QR &amp; Code</button>
+        <button type="button" data-nav-view="kitchen" class="nav-pill rounded-lg px-3 py-2 text-left text-xs font-bold">Kitchen Display</button>
+        <button type="button" data-nav-view="owner" class="nav-pill rounded-lg px-3 py-2 text-left text-xs font-bold">Owner Dashboard</button>
+        <button type="button" data-nav-view="admin" class="nav-pill rounded-lg px-3 py-2 text-left text-xs font-bold">Admin Panel</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========================================================= -->
+  <!-- VIEW 1: SIMPLE & PREMIUM LANDING PAGE                     -->
+  <!-- ========================================================= -->
+  <main id="view-landing" class="app-view">
+    <section class="bg-gradient-to-b from-emerald-50/80 via-white to-slate-50 py-12 sm:py-20">
+      <div class="mx-auto max-w-6xl px-4 sm:px-6">
+        <div class="mx-auto max-w-3xl text-center">
+          <span class="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-4 py-1.5 text-xs font-bold text-[#0f6b30] shadow-sm">
+            <i data-lucide="sparkles" class="h-3.5 w-3.5 text-amber-500"></i>
+            Simple • Premium • All-in-One Restaurant POS
+          </span>
+          <h1 class="mt-5 text-4xl font-black tracking-tight text-slate-900 sm:text-5xl">
+            Smart Restaurant Billing &amp; <span class="text-[#0f6b30]">Table-Wise QR Ordering</span>
+          </h1>
+          <p class="mt-4 text-base leading-relaxed text-slate-600 sm:text-lg">
+            Permanent table-wise QR codes (<code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs">?table=1..N</code>), owner-created secret session codes, Half/Full menu pricing, 3-display sync, real UPI / Razorpay / Cash payments, 58mm &amp; Bluetooth thermal printing, and WhatsApp bills.
+          </p>
+
+          <div class="mt-8 flex flex-wrap justify-center gap-3">
+            <button type="button" data-nav-view="customer" class="inline-flex items-center gap-2 rounded-xl bg-[#0f6b30] px-6 py-3.5 text-sm font-bold text-white shadow-lg shadow-emerald-900/15 transition hover:bg-[#0a4720]">
+              <i data-lucide="qr-code" class="h-4 w-4"></i>
+              Customer QR Scan
+            </button>
+            <button type="button" data-open-login-tab="owner" class="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-6 py-3.5 text-sm font-extrabold text-slate-950 shadow-sm transition hover:bg-amber-300">
+              <i data-lucide="store" class="h-4 w-4"></i>
+              Owner Login / Subscribe
+            </button>
+            <button type="button" data-open-login-tab="admin" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-6 py-3.5 text-sm font-bold text-slate-800 shadow-sm transition hover:border-emerald-500 hover:text-[#0f6b30]">
+              <i data-lucide="shield" class="h-4 w-4 text-emerald-600"></i>
+              Admin Login
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-14 grid gap-5 md:grid-cols-3">
+          <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100 text-[#0f6b30]">
+              <i data-lucide="store" class="h-5 w-5"></i>
+            </div>
+            <h3 class="mt-4 text-base font-extrabold text-slate-900">1. Owner Control Dashboard</h3>
+            <p class="mt-1.5 text-sm text-slate-600">Print real scannable Table QRs, create session codes, view live orders, collect UPI/Razorpay/Cash &amp; print 58mm receipts.</p>
+          </div>
+          <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
+              <i data-lucide="smartphone" class="h-5 w-5"></i>
+            </div>
+            <h3 class="mt-4 text-base font-extrabold text-slate-900">2. Customer Table QR &amp; Code</h3>
+            <p class="mt-1.5 text-sm text-slate-600">Scanning Table QR opens only the Customer screen directly. Pay via UPI app deep-link, Razorpay, or Cash.</p>
+          </div>
+          <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
+              <i data-lucide="chef-hat" class="h-5 w-5"></i>
+            </div>
+            <h3 class="mt-4 text-base font-extrabold text-slate-900">3. Dedicated Kitchen Display</h3>
+            <p class="mt-1.5 text-sm text-slate-600">Connect a Bluetooth 58mm thermal printer or print directly from the Kitchen Display.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="border-t border-slate-200 bg-white py-14 sm:py-16">
+      <div class="mx-auto max-w-6xl px-4 sm:px-6">
+        <div class="text-center">
+          <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-extrabold uppercase text-emerald-800">Subscription Plans</span>
+          <h2 class="mt-3 text-2xl font-black text-slate-900 sm:text-3xl">Choose a Plan &amp; Unlock Features</h2>
+          <p class="mt-1.5 text-sm text-slate-500">Owners subscribe to unlock features; Single Admin controls active/stopped status live.</p>
+        </div>
+        <div id="landingPlansGrid" class="mt-10 grid gap-6 md:grid-cols-3"></div>
+      </div>
+    </section>
+
+    <footer class="border-t border-emerald-900/10 bg-[#0a4720] py-6 text-white">
+      <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 text-xs sm:px-6">
+        <p class="font-bold">DigiRes — Smart Restaurant Billing &amp; QR Ordering</p>
+        <p class="font-semibold text-emerald-100">
+          Customer Support: <a href="mailto:hareshfegade@gmail.com" class="font-extrabold text-amber-400 underline hover:text-amber-300">hareshfegade@gmail.com</a>
+        </p>
+      </div>
+    </footer>
+  </main>
+
+  <!-- ========================================================= -->
+  <!-- VIEW 2: CUSTOMER TABLE QR & CODE DISPLAY                  -->
+  <!-- ========================================================= -->
+  <main id="view-customer" class="app-view hidden py-8 sm:py-12">
+    <div class="mx-auto max-w-5xl px-4 sm:px-6">
+      <div class="rounded-3xl border border-emerald-200 bg-white p-5 shadow-sm sm:p-6">
+        <div class="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+          <div>
+            <span id="custTableBadge" class="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-extrabold uppercase text-emerald-800">Table-Wise Permanent QR</span>
+            <h2 class="mt-2 text-2xl font-black text-slate-900">Scan Table QR &amp; Enter Owner Code</h2>
+            <p id="custScanHint" class="text-xs text-slate-500">Select your table below (or scan ?table=N QR), then enter the Session Code given by the Owner.</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <input id="customerCodeInput" type="text" placeholder="Enter Session Code" class="w-48 rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-bold uppercase tracking-wider focus:border-[#0f6b30] focus:outline-none" />
+            <button id="verifyCodeBtn" type="button" class="rounded-xl bg-[#0f6b30] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#0a4720]">
+              Unlock Menu
+            </button>
+          </div>
+        </div>
+
+        <div id="custTableStripWrap" class="mt-4 border-t border-slate-100 pt-3">
+          <p class="text-xs font-bold text-slate-600">Tap a Table QR to Simulate Scan:</p>
+          <div id="customerTableQrStrip" class="mt-2 flex flex-wrap gap-2"></div>
+        </div>
+      </div>
+
+      <div id="customerSessionArea" class="mt-6 hidden grid gap-6 lg:grid-cols-12">
+        <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-7">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+              <h3 class="text-lg font-extrabold text-slate-900">Digital Menu</h3>
+              <p class="text-xs text-slate-500">Select Half or Full portion and add to your order.</p>
+            </div>
+            <span id="custSessionBadge" class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-extrabold text-emerald-800"></span>
+          </div>
+          <div id="customerMenuList" class="mt-4 space-y-3"></div>
+        </div>
+
+        <div class="space-y-5 lg:col-span-5">
+          <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h3 class="text-base font-extrabold text-slate-900">New Order Basket</h3>
+            <div id="customerCartList" class="mt-3 space-y-2 text-sm"></div>
+            <button id="placeCustomerOrderBtn" type="button" class="mt-4 w-full rounded-xl bg-[#0f6b30] py-3 text-sm font-extrabold text-white shadow-sm hover:bg-[#0a4720]">
+              Send Order to Kitchen &amp; Owner
+            </button>
+          </div>
+
+          <div class="rounded-3xl border border-amber-200 bg-amber-50/40 p-5 shadow-sm">
+            <div class="flex items-center justify-between">
+              <h3 class="text-base font-extrabold text-slate-900">Combined Bill &amp; Live Status</h3>
+              <span id="custOrderStatusPill" class="rounded-full bg-amber-200 px-2.5 py-0.5 text-[11px] font-extrabold text-amber-950"></span>
+            </div>
+            <p class="mt-1 text-[11px] text-slate-500">Repeat orders on this code automatically merge here.</p>
+
+            <div id="custCombinedItems" class="mt-3 max-h-44 space-y-1.5 overflow-y-auto border-y border-amber-200/70 py-2.5 text-xs"></div>
+
+            <div class="mt-3 space-y-1 text-xs">
+              <div class="flex justify-between text-slate-600"><span>Subtotal</span><span id="custSubTotal">₹0</span></div>
+              <div class="flex justify-between text-slate-600"><span id="custGstLabel">GST (5%)</span><span id="custGstTotal">₹0</span></div>
+              <div class="flex justify-between text-base font-black text-slate-900"><span>Total Payable</span><span id="custGrandTotal">₹0</span></div>
+            </div>
+
+            <div id="custPaymentBox" class="mt-4 space-y-2.5 border-t border-amber-200/70 pt-3">
+              <label class="block text-xs font-bold text-slate-700">Customer WhatsApp Number (for Bill)</label>
+              <input id="custWhatsappInput" type="tel" placeholder="e.g. 9876543210" class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:border-[#0f6b30] focus:outline-none" />
+              <div class="grid grid-cols-3 gap-2">
+                <button id="custPayUpiBtn" type="button" class="rounded-xl bg-[#0f6b30] py-2.5 text-xs font-extrabold text-white hover:bg-[#0a4720]">
+                  Pay UPI
+                </button>
+                <button id="custPayRazorpayBtn" type="button" class="rounded-xl bg-slate-900 py-2.5 text-xs font-extrabold text-white hover:bg-slate-800">
+                  Razorpay
+                </button>
+                <button id="custPayCashBtn" type="button" class="rounded-xl bg-amber-500 py-2.5 text-xs font-extrabold text-slate-950 hover:bg-amber-400">
+                  Cash
+                </button>
+              </div>
+            </div>
+
+            <div id="custPaidBox" class="mt-4 hidden rounded-2xl bg-emerald-100 p-3 text-center text-xs font-bold text-emerald-900">
+              <p>Payment Complete! Session Code expired. Table QR remains active for the next guest.</p>
+              <button id="custSendWaBtn" type="button" class="mt-2 w-full rounded-lg bg-emerald-700 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-800">
+                Get Bill on WhatsApp
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="customerEmptyState" class="mt-6 rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center">
+        <i data-lucide="qr-code" class="mx-auto h-12 w-12 text-slate-300"></i>
+        <h3 class="mt-3 text-base font-extrabold text-slate-800">Ask the Owner for your Table Session Code</h3>
+        <p class="mt-1 text-xs text-slate-500">Codes are private and created only by the Owner in the Owner Dashboard.</p>
+      </div>
+      <p class="mt-6 text-center text-xs font-semibold text-slate-500">
+        DigiRes Support: <a href="mailto:hareshfegade@gmail.com" class="font-bold text-[#0f6b30] hover:underline">hareshfegade@gmail.com</a>
+      </p>
+    </div>
+  </main>
+
+  <!-- ========================================================= -->
+  <!-- VIEW 3: DEDICATED KITCHEN DISPLAY + BLUETOOTH PRINTER     -->
+  <!-- ========================================================= -->
+  <main id="view-kitchen" class="app-view hidden py-8">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6">
+      <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#0a4720] p-5 text-white shadow-md">
+        <div>
+          <h2 class="text-xl font-black">Kitchen Display System (KDS)</h2>
+          <p class="text-xs text-emerald-200">All kitchen orders &amp; 58mm / Bluetooth thermal prints happen directly here.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="connectBtKitchenBtn" type="button" class="rounded-xl bg-white/15 px-3.5 py-2 text-xs font-bold text-white ring-1 ring-white/30 hover:bg-white/25">
+            Connect Bluetooth Printer
+          </button>
+          <span id="btPrinterStatus" class="rounded-full bg-amber-400 px-3 py-1 text-xs font-black text-slate-950">58mm Print Ready</span>
+        </div>
+      </div>
+
+      <div class="mt-6 grid gap-6 lg:grid-cols-12">
+        <div class="lg:col-span-8">
+          <h3 class="mb-3 text-sm font-black uppercase tracking-wide text-slate-700">Live Incoming Kitchen Orders</h3>
+          <div id="kitchenDisplayGrid" class="grid gap-4 sm:grid-cols-2"></div>
+        </div>
+
+        <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-4">
+          <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h3 class="text-sm font-black uppercase text-slate-900">Kitchen Auto-Print Log</h3>
+            <span class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">Direct Print</span>
+          </div>
+          <div id="kitchenPrintLog" class="mt-3 space-y-2.5 text-xs"></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ========================================================= -->
+  <!-- VIEW 4: OWNER DASHBOARD                                   -->
+  <!-- ========================================================= -->
+  <main id="view-owner" class="app-view hidden py-8">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6">
+      <div id="ownerStoppedBanner" class="hidden rounded-3xl border-2 border-red-300 bg-red-50 p-8 text-center shadow-sm">
+        <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-100 text-red-600">
+          <i data-lucide="lock" class="h-7 w-7"></i>
+        </div>
+        <h2 class="mt-3 text-2xl font-black text-red-900">Subscription Stopped by Admin</h2>
+        <p id="ownerStoppedDesc" class="mx-auto mt-2 max-w-md text-sm text-red-700"></p>
+        <p class="mt-4 text-xs font-bold text-slate-700">
+          Need help? Contact Support: <a href="mailto:hareshfegade@gmail.com" class="text-[#0f6b30] underline">hareshfegade@gmail.com</a>
+        </p>
+      </div>
+
+      <div id="ownerActiveWorkspace">
+        <div class="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-emerald-200 bg-white p-5 shadow-sm">
+          <div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="rounded-full bg-emerald-100 px-3 py-0.5 text-[11px] font-extrabold uppercase text-emerald-800">Owner Control Center</span>
+              <span id="ownerSubPlanPill" class="rounded-full bg-amber-100 px-3 py-0.5 text-[11px] font-extrabold text-amber-900"></span>
+            </div>
+            <h2 id="ownerRestaurantTitle" class="mt-1 text-2xl font-black text-slate-900">DigiRes Cafe &amp; Kitchen</h2>
+            <p id="ownerPaymentSummary" class="text-xs text-slate-500"></p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" data-owner-tab="panels" class="owner-tab-btn rounded-xl bg-[#0f6b30] px-4 py-2 text-xs font-bold text-white">Table QRs, Orders &amp; Billing</button>
+            <button type="button" data-owner-tab="menu" class="owner-tab-btn rounded-xl bg-slate-100 px-4 py-2 text-xs font-bold text-slate-700">Menu (Half/Full)</button>
+            <button type="button" data-owner-tab="settings" class="owner-tab-btn rounded-xl bg-slate-100 px-4 py-2 text-xs font-bold text-slate-700">UPI / Razorpay / GST / Printer</button>
+          </div>
+        </div>
+
+        <div id="ownerUnlockedStrip" class="mt-4 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs"></div>
+
+        <div id="ownerTab-panels" class="owner-tab-content mt-5 grid gap-6 lg:grid-cols-3">
+          <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 class="text-sm font-black uppercase tracking-wide text-slate-900">1. Table QRs &amp; Codes</h3>
+              <span id="ownerTableCountBadge" class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">7 Tables</span>
+            </div>
+
+            <form id="adjustTablesForm" class="mt-3 flex items-center gap-2 rounded-2xl bg-slate-50 p-2.5 ring-1 ring-slate-200">
+              <label class="text-[11px] font-bold text-slate-700">Total Tables:</label>
+              <input id="tableCountInput" type="number" min="1" max="50" value="7" class="w-16 rounded-lg border border-slate-300 bg-white px-2 py-1 text-center text-xs font-extrabold" />
+              <button type="submit" class="ml-auto rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-slate-800">Update QRs</button>
+            </form>
+
+            <div id="ownerTableQrsGrid" class="mt-3 grid max-h-60 grid-cols-2 gap-2.5 overflow-y-auto pr-1"></div>
+
+            <div class="mt-4 border-t border-slate-100 pt-3">
+              <p class="text-xs font-extrabold text-slate-700">Owner-Only Session Codes (Copy for Guest)</p>
+              <div id="ownerCodesList" class="mt-2 max-h-48 space-y-2 overflow-y-auto"></div>
+            </div>
+          </div>
+
+          <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 class="text-sm font-black uppercase tracking-wide text-slate-900">2. Live Customer Orders</h3>
+              <span class="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-bold text-amber-800">Owner View</span>
+            </div>
+            <p class="mt-2 text-[11px] text-slate-500">Customer orders appear here &amp; on Kitchen Display simultaneously.</p>
+            <div id="ownerLiveOrdersList" class="mt-3 space-y-3"></div>
+          </div>
+
+          <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 class="text-sm font-black uppercase tracking-wide text-slate-900">3. Billing &amp; Auto Receipts</h3>
+                <p class="text-[10px] font-semibold text-slate-400">History auto-removes after 7 days</p>
+              </div>
+              <button id="connectBtOwnerBtn" type="button" class="rounded-full bg-sky-100 px-2.5 py-0.5 text-[10px] font-bold text-sky-800 hover:bg-sky-200">Pair BT Printer</button>
+            </div>
+            <div id="ownerBillingList" class="mt-4 space-y-3"></div>
+          </div>
+        </div>
+
+        <div id="ownerTab-menu" class="owner-tab-content mt-6 hidden rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 class="text-lg font-black text-slate-900">Manual Menu Setup (Half / Full Pricing)</h3>
+          <form id="addMenuForm" class="mt-4 grid gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-5">
+            <input id="menuNameInput" type="text" required placeholder="Dish Name (e.g. Paneer Chilli)" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold sm:col-span-2" />
+            <input id="menuHalfInput" type="number" min="0" placeholder="Half Price ₹ (optional)" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold" />
+            <input id="menuFullInput" type="number" min="1" required placeholder="Full Price ₹ *" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold" />
+            <button type="submit" class="rounded-xl bg-[#0f6b30] px-4 py-2 text-xs font-bold text-white hover:bg-[#0a4720]">+ Add Item</button>
+          </form>
+          <div id="ownerMenuTable" class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3"></div>
+        </div>
+
+        <div id="ownerTab-settings" class="owner-tab-content mt-6 hidden rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 class="text-lg font-black text-slate-900">Payment, GST &amp; Thermal Printer Settings</h3>
+          <form id="ownerSettingsForm" class="mt-4 grid gap-4 md:grid-cols-2">
+            <div>
+              <label class="block text-xs font-bold text-slate-700">Restaurant / Cafe Name</label>
+              <input id="setRestName" type="text" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-700">Owner UPI ID (Used for Real UPI Link)</label>
+              <input id="setUpiId" type="text" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-700">Razorpay Key ID (Live or Test Key)</label>
+              <input id="setRazorpayKey" type="text" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-slate-700">GST % (Set 0 for No GST, or 5 / 12 / 18)</label>
+              <input id="setGstPercent" type="number" min="0" max="28" step="0.5" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold" />
+            </div>
+            <div class="flex flex-col justify-center gap-2 rounded-2xl bg-slate-50 p-4">
+              <label class="flex items-center gap-2.5 text-xs font-bold text-slate-800">
+                <input id="setAutoKotPrint" type="checkbox" class="h-4 w-4 accent-[#0f6b30]" />
+                Auto-Print KOT Receipt directly in Kitchen Display
+              </label>
+              <label class="flex items-center gap-2.5 text-xs font-bold text-slate-800">
+                <input id="setAutoOwnerPrint" type="checkbox" class="h-4 w-4 accent-[#0f6b30]" />
+                Auto-Print Payment Receipt at Owner Desk
+              </label>
+            </div>
+            <div class="md:col-span-2">
+              <button type="submit" class="rounded-xl bg-[#0f6b30] px-6 py-3 text-sm font-bold text-white hover:bg-[#0a4720]">
+                Save Owner Settings
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <p class="mt-6 text-center text-xs font-semibold text-slate-500">
+        DigiRes Partner Support: <a href="mailto:hareshfegade@gmail.com" class="font-bold text-[#0f6b30] hover:underline">hareshfegade@gmail.com</a>
+      </p>
+    </div>
+  </main>
+
+  <!-- ========================================================= -->
+  <!-- VIEW 5: SINGLE SUPER ADMIN CONSOLE                        -->
+  <!-- ========================================================= -->
+  <main id="view-admin" class="app-view hidden py-8">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6">
+      <div class="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-slate-900 p-6 text-white shadow-md">
+        <div>
+          <span class="rounded-full bg-amber-400 px-3 py-1 text-[11px] font-black uppercase text-slate-950">Single Super Admin (Private)</span>
+          <h2 class="mt-2 text-2xl font-black">Live Subscription, Owner &amp; Payment Monitor</h2>
+          <p class="text-xs text-slate-300">Stop/Activate Owners, change plans, toggle features, and monitor live payments.</p>
+        </div>
+        <div id="adminKpis" class="flex flex-wrap gap-3 text-center"></div>
+      </div>
+
+      <div class="mt-6 grid gap-6 lg:grid-cols-12">
+        <div class="space-y-6 lg:col-span-7">
+          <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 class="text-base font-black text-slate-900">All Owners &amp; Live Subscription Control</h3>
+              <span class="text-xs font-semibold text-slate-500">Stop / Activate anytime</span>
+            </div>
+            <div id="adminOwnersList" class="mt-4 space-y-4"></div>
+          </div>
+
+          <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 class="text-base font-black text-slate-900">Live Payments Feed (UPI / Razorpay / Cash)</h3>
+              <span class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">Real-Time</span>
+            </div>
+            <div id="adminLivePaymentsList" class="mt-3 space-y-2 text-xs"></div>
+          </div>
+        </div>
+
+        <div class="space-y-6 lg:col-span-5">
+          <!-- Admin Payment Settings (UPI & Razorpay for Owner Subscriptions) -->
+          <div class="rounded-3xl border border-emerald-200 bg-white p-6 shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 class="text-base font-black text-slate-900">Admin Payment Settings</h3>
+              <span class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">UPI / Razorpay</span>
+            </div>
+            <p class="mt-1.5 text-xs text-slate-500">Owners pay their subscription fees directly to your UPI ID or Razorpay.</p>
+            <form id="adminPaymentSettingsForm" class="mt-4 space-y-3">
+              <div>
+                <label class="block text-xs font-bold text-slate-700">Admin UPI ID (For Owner Subscriptions)</label>
+                <input id="adminSetUpiId" type="text" required class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold" />
+              </div>
+              <div>
+                <label class="block text-xs font-bold text-slate-700">Admin Razorpay Key ID</label>
+                <input id="adminSetRazorpayKey" type="text" required class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold" />
+              </div>
+              <label class="flex items-center gap-2 text-xs font-bold text-slate-700">
+                <input id="adminSetAutoActivate" type="checkbox" class="h-4 w-4 accent-[#0f6b30]" />
+                Auto-Activate Owner Account After Subscription Payment
+              </label>
+              <button type="submit" class="w-full rounded-xl bg-[#0f6b30] py-2.5 text-xs font-bold text-white hover:bg-[#0a4720]">
+                Save Admin Payment Settings
+              </button>
+            </form>
+          </div>
+
+          <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 class="text-base font-black text-slate-900">Subscription Plans (Live on Home Page)</h3>
+          <form id="addPlanForm" class="mt-4 space-y-2.5 rounded-2xl bg-slate-50 p-4">
+            <div class="grid grid-cols-2 gap-2">
+              <input id="planNameInput" type="text" required placeholder="Plan Name" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold" />
+              <input id="planPriceInput" type="number" min="0" required placeholder="Price ₹/yr" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold" />
+            </div>
+            <input id="planTagInput" type="text" required placeholder="Tag (e.g. Best for Cafes)" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold" />
+            <button type="submit" class="w-full rounded-xl bg-[#0f6b30] py-2 text-xs font-bold text-white hover:bg-[#0a4720]">+ Publish New Plan</button>
+          </form>
+          <div id="adminPlansList" class="mt-4 space-y-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ========================================================= -->
+  <!-- LOGIN / OWNER SUBSCRIBE MODAL (ADMIN LOCKED PRIVATE)      -->
+  <!-- ========================================================= -->
+  <div id="loginModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+    <div class="relative w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+      <button id="closeLoginBtn" type="button" aria-label="Close" class="absolute top-4 right-4 rounded-full p-1.5 text-slate-400 hover:bg-slate-100">
+        <i data-lucide="x" class="h-5 w-5"></i>
+      </button>
+      <h3 class="text-xl font-black text-slate-900">DigiRes Login Portal</h3>
+      <p class="mt-1 text-xs text-slate-500">Choose Owner Login, New Subscribe, or Private Admin Login.</p>
+
+      <div class="mt-4 grid grid-cols-3 gap-1.5 rounded-xl bg-slate-100 p-1">
+        <button type="button" data-login-role="owner" class="login-role-btn rounded-lg bg-[#0f6b30] py-2 text-[11px] font-bold text-white">Owner Login</button>
+        <button type="button" data-login-role="subscribe" class="login-role-btn rounded-lg py-2 text-[11px] font-bold text-slate-600">New Subscribe</button>
+        <button type="button" data-login-role="admin" class="login-role-btn rounded-lg py-2 text-[11px] font-bold text-slate-600">Admin Login</button>
+      </div>
+
+      <form id="loginForm" class="mt-4 space-y-3">
+        <div>
+          <label class="block text-xs font-bold text-slate-700">Email</label>
+          <input id="loginEmail" type="email" required placeholder="Enter your email" class="mt-1 w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm focus:border-[#0f6b30] focus:outline-none" />
+        </div>
+        <div>
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-bold text-slate-700">Password</label>
+            <button id="openForgotBtn" type="button" class="text-[11px] font-bold text-[#0f6b30] hover:underline">Forgot Password?</button>
+          </div>
+          <input id="loginPassword" type="password" required placeholder="Enter your password" class="mt-1 w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm focus:border-[#0f6b30] focus:outline-none" />
+        </div>
+        <button type="submit" class="w-full rounded-xl bg-[#0f6b30] py-3 text-sm font-extrabold text-white hover:bg-[#0a4720]">
+          Sign In
+        </button>
+
+        <div id="ownerDemoBox" class="rounded-xl bg-emerald-50 p-3 text-[11px] text-emerald-950">
+          <p class="font-extrabold">Owner Demo Account:</p>
+          <button id="instantOwnerLoginBtn" type="button" class="mt-1.5 w-full rounded-lg bg-white px-2.5 py-2 font-bold text-[#0f6b30] ring-1 ring-emerald-300 hover:bg-emerald-100">
+            Quick Owner Demo Login
+          </button>
+        </div>
+      </form>
+
+      <form id="subscribeForm" class="mt-4 hidden space-y-3">
+        <div>
+          <label class="block text-xs font-bold text-slate-700">Owner Name *</label>
+          <input id="subOwnerName" type="text" required placeholder="e.g. Vikram Patil" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700">Cafe / Restaurant Name *</label>
+          <input id="subShopName" type="text" required placeholder="e.g. Chai Junction" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs font-bold text-slate-700">Owner Email *</label>
+            <input id="subEmail" type="email" required placeholder="vikram@chai.in" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-700">Create Password *</label>
+            <input id="subPassword" type="password" required minlength="4" placeholder="Min 4 chars" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700">Select Plan *</label>
+          <select id="subPlanSelect" class="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-bold"></select>
+        </div>
+        <div class="rounded-xl bg-slate-50 p-2.5 text-[11px] text-slate-600 ring-1 ring-slate-200">
+          <p class="font-bold text-slate-800">Pay Subscription To Admin:</p>
+          <p id="subAdminPayPreview" class="mt-0.5 font-mono text-[10px] text-[#0f6b30]"></p>
+        </div>
+        <button type="submit" class="w-full rounded-xl bg-amber-400 py-3 text-sm font-black text-slate-950 hover:bg-amber-300">
+          Sign Up &amp; Pay Subscription
+        </button>
+        <button id="subToLoginBtn" type="button" class="w-full rounded-xl border border-slate-200 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+          Already Registered? Owner Login
+        </button>
+      </form>
+
+      <div id="subSuccessBox" class="mt-4 hidden rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center">
+        <i data-lucide="check-circle-2" class="mx-auto h-10 w-10 text-[#0f6b30]"></i>
+        <h4 class="mt-2 text-base font-black text-slate-900">Sign Up &amp; Subscription Complete!</h4>
+        <p id="subSuccessText" class="mt-1 text-xs text-slate-600"></p>
+        <button id="goToLoginAfterSubBtn" type="button" class="mt-4 w-full rounded-xl bg-[#0f6b30] py-2.5 text-sm font-extrabold text-white hover:bg-[#0a4720]">
+          Login Now
+        </button>
+      </div>
+
+      <form id="forgotPasswordForm" class="mt-4 hidden space-y-3">
+        <div class="rounded-xl bg-amber-50 p-2.5 text-[11px] font-semibold text-amber-900">
+          Reset your Owner or Admin password below.
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700">Registered Email *</label>
+          <input id="forgotEmail" type="email" required placeholder="Enter registered email" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-[#0f6b30] focus:outline-none" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700">Recovery PIN (Only for Admin; optional for Owner)</label>
+          <input id="forgotVerify" type="text" placeholder="Admin PIN: 2026 (leave blank for Owner)" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-[#0f6b30] focus:outline-none" />
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700">New Password *</label>
+          <input id="forgotNewPass" type="password" required minlength="4" placeholder="Min 4 characters" class="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-[#0f6b30] focus:outline-none" />
+        </div>
+        <div class="flex gap-2">
+          <button id="backToLoginBtn" type="button" class="flex-1 rounded-xl border border-slate-200 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50">
+            Back
+          </button>
+          <button type="submit" class="flex-1 rounded-xl bg-[#0f6b30] py-2.5 text-xs font-extrabold text-white hover:bg-[#0a4720]">
+            Update Password
+          </button>
+        </div>
+      </form>
+
+      <p class="mt-4 border-t border-slate-100 pt-3 text-center text-[11px] font-semibold text-slate-500">
+        Support: <a href="mailto:hareshfegade@gmail.com" class="font-bold text-[#0f6b30] hover:underline">hareshfegade@gmail.com</a>
+      </p>
+    </div>
+  </div>
+
+  <!-- ========================================================= -->
+  <!-- REAL UPI / RAZORPAY / CASH PAYMENT MODAL                  -->
+  <!-- ========================================================= -->
+  <div id="paymentGatewayModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+    <div class="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl">
+      <button id="closePayModalBtn" type="button" aria-label="Close" class="absolute top-4 right-4 rounded-full p-1.5 text-slate-400 hover:bg-slate-100">
+        <i data-lucide="x" class="h-5 w-5"></i>
+      </button>
+      <span id="payModalMethodBadge" class="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-extrabold text-emerald-800"></span>
+      <h3 class="mt-2 text-xl font-black text-slate-900">Complete Payment</h3>
+      <p id="payModalAmount" class="mt-1 text-2xl font-black text-[#0f6b30]"></p>
+      <div id="payModalDetails" class="mt-3 rounded-2xl bg-slate-50 p-3.5 text-xs text-slate-700 ring-1 ring-slate-200"></div>
+      <div id="upiQrBox" class="mt-3 flex justify-center"></div>
+      <a id="upiDeepLinkBtn" href="#" class="mt-3 hidden block w-full rounded-xl bg-slate-900 py-2.5 text-center text-xs font-extrabold text-white hover:bg-slate-800">
+        Open GPay / PhonePe / Paytm
+      </a>
+      <button id="confirmLivePayBtn" type="button" class="mt-3 w-full rounded-xl bg-[#0f6b30] py-3 text-sm font-extrabold text-white hover:bg-[#0a4720]">
+        Confirm &amp; Complete Payment
+      </button>
+    </div>
+  </div>
+
+  <!-- ========================================================= -->
+  <!-- PRINTABLE TABLE QR POSTER MODAL (FOR OWNER)               -->
+  <!-- ========================================================= -->
+  <div id="tableQrPrintModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+    <div class="relative w-full max-w-xs rounded-3xl bg-white p-6 text-center shadow-2xl">
+      <button id="closeQrModalBtn" type="button" aria-label="Close" class="absolute top-3 right-3 rounded-full p-1.5 text-slate-400 hover:bg-slate-100">
+        <i data-lucide="x" class="h-5 w-5"></i>
+      </button>
+      <p id="qrModalShop" class="text-sm font-black text-[#0f6b30]"></p>
+      <h3 id="qrModalTableTitle" class="mt-1 text-xl font-black text-slate-900"></h3>
+      <div id="qrModalRender" class="my-4 flex justify-center"></div>
+      <p id="qrModalUrl" class="break-all rounded-lg bg-slate-100 p-2 text-[10px] font-mono text-slate-600"></p>
+      <button id="printQrPosterBtn" type="button" class="mt-4 w-full rounded-xl bg-[#0f6b30] py-2.5 text-xs font-bold text-white hover:bg-[#0a4720]">
+        Print Table QR Sticker
+      </button>
+    </div>
+  </div>
+
+  <!-- ========================================================= -->
+  <!-- AUTO 58MM THERMAL RECEIPT MODAL (OWNER & KITCHEN ONLY)    -->
+  <!-- ========================================================= -->
+  <div id="receiptModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+    <div class="relative w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl">
+      <button id="closeReceiptBtn" type="button" aria-label="Close" class="absolute top-3 right-3 rounded-full p-1.5 text-slate-400 hover:bg-slate-100">
+        <i data-lucide="x" class="h-5 w-5"></i>
+      </button>
+      <div id="receiptPrintArea" class="receipt-paper rounded-2xl border border-slate-200 p-4 text-xs text-slate-800"></div>
+      <div class="mt-4 flex gap-2">
+        <button id="printReceiptNowBtn" type="button" class="flex-1 rounded-xl bg-[#0f6b30] py-2.5 text-xs font-bold text-white hover:bg-[#0a4720]">
+          Print 58mm
+        </button>
+        <button id="ownerWaReceiptBtn" type="button" class="flex-1 rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white hover:bg-emerald-700">
+          WhatsApp Bill
+        </button>
+        <button id="closeReceiptFooterBtn" type="button" class="rounded-xl border border-slate-200 px-3 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = 'digires_platform_v7';
+    const ADMIN_EMAIL = 'admin@digires.in';
+    const ADMIN_DEFAULT_PASS = 'DigiRes@2026';
+    const ADMIN_RECOVERY_PIN = '2026';
+
+    const ALL_FEATURES = [
+      { key: 'qrOrdering', label: 'QR & Code Ordering' },
+      { key: 'kds', label: 'Kitchen Display (KDS)' },
+      { key: 'whatsappBill', label: 'WhatsApp Bill' },
+      { key: 'autoPrinter', label: 'Auto Thermal Printer' }
+    ];
+
+    function buildTables(count) {
+      const list = [];
+      for (let i = 1; i <= count; i++) {
+        list.push({ id: i, label: `Table ${i}`, qrId: `QR-T${i}`, active: true });
+      }
+      return list;
+    }
+
+    const defaultState = {
+      currentView: 'landing',
+      authRole: null,
+      activeOwnerId: 1,
+      loginRoleTab: 'owner',
+      activeCustomerCode: null,
+      pendingPayMethod: null,
+      customerCart: [],
+      tableCount: 7,
+      tables: buildTables(7),
+      kitchenPrintLogs: [
+        { id: 1, ownerId: 1, time: '12:05 PM', code: 'CAFE-101', tableLabel: 'Table 1', summary: '1x Paneer Tikka Masala (Half), 2x Cold Coffee' }
+      ],
+      paymentLogs: [],
+      adminPaymentSettings: {
+        upiId: 'admin.digires@okicici',
+        razorpayKey: 'rzp_live_admin_digires',
+        autoActivateOnPay: true
+      },
+      ownerSettings: {
+        restaurantName: 'DigiRes Cafe & Kitchen',
+        upiId: 'digires.cafe@okicici',
+        razorpayKey: 'rzp_test_digires99',
+        gstPercent: 5,
+        autoKotPrint: true,
+        autoOwnerPrint: true
+      },
+      plans: [
+        {
+          id: 1,
+          name: 'Lite Plan (Special Offer)',
+          price: 3999,
+          tag: 'Best for Cafes & Food Trucks',
+          active: true,
+          features: { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: false }
+        },
+        {
+          id: 2,
+          name: 'Pro Plan + Free Printer',
+          price: 4999,
+          tag: 'Free Mobile Thermal Printer',
+          active: true,
+          features: { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: true }
+        },
+        {
+          id: 3,
+          name: 'Multi-Branch Enterprise',
+          price: 11999,
+          tag: 'Unlimited Branches & KDS',
+          active: true,
+          features: { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: true }
+        }
+      ],
+      owners: [
+        {
+          id: 1,
+          shop: 'DigiRes Cafe & Kitchen',
+          owner: 'Rahul Sharma',
+          email: 'owner@cafe.in',
+          password: 'owner123',
+          planId: 2,
+          status: 'Active',
+          validTill: '2027-11-24',
+          features: { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: true }
+        },
+        {
+          id: 2,
+          shop: 'Spice Wheel Food Truck',
+          owner: 'Amit Verma',
+          email: 'amit@spicewheel.in',
+          password: 'amit123',
+          planId: 1,
+          status: 'Active',
+          validTill: '2027-10-15',
+          features: { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: false }
+        }
+      ],
+      menu: [
+        { id: 1, name: 'Paneer Tikka Masala', halfPrice: 140, fullPrice: 240 },
+        { id: 2, name: 'Veg Dum Biryani', halfPrice: 110, fullPrice: 190 },
+        { id: 3, name: 'Classic Cold Coffee', halfPrice: null, fullPrice: 120 },
+        { id: 4, name: 'Cheese Veg Burger', halfPrice: null, fullPrice: 149 },
+        { id: 5, name: 'Peri Peri Fries', halfPrice: 80, fullPrice: 130 },
+        { id: 6, name: 'Masala Chai', halfPrice: null, fullPrice: 30 }
+      ],
+      sessions: [
+        {
+          ownerId: 1,
+          code: 'CAFE-101',
+          tableId: 1,
+          tableLabel: 'Table 1',
+          status: 'Preparing',
+          paid: false,
+          paymentMethod: null,
+          whatsappNumber: '',
+          items: [
+            { name: 'Paneer Tikka Masala', portion: 'Half', price: 140, qty: 1, round: 1 },
+            { name: 'Classic Cold Coffee', portion: 'Full', price: 120, qty: 2, round: 1 }
+          ],
+          rounds: 1
+        }
+      ]
+    };
+
+    let state = loadState();
+    let btPrinterDevice = null;
+
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+    function pruneOldBillingHistory(st) {
+      if (!st) return st;
+      const now = Date.now();
+      if (Array.isArray(st.sessions)) {
+        st.sessions = st.sessions.filter(sess => {
+          if (!sess.paid) return true;
+          const ts = sess.paidAt || sess.createdAt || now;
+          return (now - ts) <= SEVEN_DAYS_MS;
+        });
+      }
+      if (Array.isArray(st.paymentLogs)) {
+        st.paymentLogs = st.paymentLogs.filter(p => (now - (p.createdAt || p.id || now)) <= SEVEN_DAYS_MS);
+      }
+      if (Array.isArray(st.kitchenPrintLogs)) {
+        st.kitchenPrintLogs = st.kitchenPrintLogs.filter(k => (now - (k.createdAt || k.id || now)) <= SEVEN_DAYS_MS);
+      }
+      return st;
+    }
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return pruneOldBillingHistory(JSON.parse(raw));
+      } catch (e) {}
+      return JSON.parse(JSON.stringify(defaultState));
+    }
+
+    function saveState() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {}
+    }
+
+    let toastTimer = null;
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      document.getElementById('toastMsg').textContent = msg;
+      t.classList.remove('hidden');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => t.classList.add('hidden'), 3200);
+    }
+
+    function formatINR(n) {
+      return '₹' + Math.round(n).toLocaleString('en-IN');
+    }
+
+    function getActiveOwner() {
+      return state.owners.find(o => o.id === state.activeOwnerId) || state.owners[0];
+    }
+
+    function getPlanById(id) {
+      return state.plans.find(p => p.id === id) || state.plans[0];
+    }
+
+    let activeReceiptCode = null;
+
+    function getGstRate() {
+      const val = Number(state.ownerSettings && state.ownerSettings.gstPercent);
+      return Number.isFinite(val) && val >= 0 ? val : 5;
+    }
+
+    function calcSessionTotals(session) {
+      const rate = getGstRate();
+      const sub = session.items.reduce((s, i) => s + i.price * i.qty, 0);
+      const gst = sub * (rate / 100);
+      return { sub, gst, rate, total: sub + gst };
+    }
+
+    function buildWhatsAppBillText(session) {
+      const owner = getActiveOwner();
+      const t = calcSessionTotals(session);
+      const itemLines = session.items.map((i, idx) =>
+        `${idx + 1}. ${i.name} (${i.portion}) x ${i.qty} = ${formatINR(i.price * i.qty)}`
+      ).join('\n');
+      return [
+        `*${owner.shop}*`,
+        `Table: ${session.tableLabel} | Code: ${session.code}`,
+        `------------------------------`,
+        itemLines,
+        `------------------------------`,
+        `Subtotal: ${formatINR(t.sub)}`,
+        `GST (${t.rate}%): ${formatINR(t.gst)}`,
+        `*Grand Total: ${formatINR(t.total)}*`,
+        `Status: ${session.paid ? 'PAID (' + session.paymentMethod + ')' : 'UNPAID'}`,
+        `Thank you for dining with us!`
+      ].join('\n');
+    }
+
+    function sendBillToWhatsApp(session) {
+      if (!session) return;
+      const msg = buildWhatsAppBillText(session);
+      const phone = (session.whatsappNumber || '').replace(/\D/g, '');
+      const url = phone.length >= 10
+        ? `https://wa.me/91${phone.slice(-10)}?text=${encodeURIComponent(msg)}`
+        : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+      window.open(url, '_blank');
+      showToast('Full itemized bill opened in WhatsApp!');
+    }
+
+    function getTableUrl(tableId) {
+      try {
+        const base = window.location.origin + window.location.pathname;
+        return `${base}?table=${tableId}`;
+      } catch (e) {
+        return `?table=${tableId}`;
+      }
+    }
+
+    function tableQrSvg(tableNum) {
+      const accent = tableNum % 2 === 0 ? '#ea8c00' : '#0f6b30';
+      return `
+        <svg viewBox="0 0 64 64" class="h-10 w-10 shrink-0 rounded-lg bg-white p-1 ring-1 ring-slate-200" aria-label="QR Table ${tableNum}">
+          <rect x="4" y="4" width="16" height="16" fill="none" stroke="#0f172a" stroke-width="4"/>
+          <rect x="9" y="9" width="6" height="6" fill="#0f172a"/>
+          <rect x="44" y="4" width="16" height="16" fill="none" stroke="#0f172a" stroke-width="4"/>
+          <rect x="49" y="9" width="6" height="6" fill="#0f172a"/>
+          <rect x="4" y="44" width="16" height="16" fill="none" stroke="#0f172a" stroke-width="4"/>
+          <rect x="9" y="49" width="6" height="6" fill="#0f172a"/>
+          <rect x="27" y="27" width="10" height="10" fill="${accent}"/>
+          <rect x="28" y="8" width="6" height="10" fill="#0f172a"/>
+          <rect x="46" y="46" width="10" height="10" fill="#0f172a"/>
+        </svg>
+      `;
+    }
+
+    async function printBluetoothText(text) {
+      if (!btPrinterDevice || !btPrinterDevice.gatt) return false;
+      try {
+        const server = btPrinterDevice.gatt.connected ? btPrinterDevice.gatt : await btPrinterDevice.gatt.connect();
+        const services = await server.getPrimaryServices();
+        for (const svc of services) {
+          const chars = await svc.getCharacteristics();
+          for (const ch of chars) {
+            if (ch.properties.write || ch.properties.writeWithoutResponse) {
+              const bytes = new TextEncoder().encode(text + '\n\n\n');
+              for (let i = 0; i < bytes.length; i += 20) {
+                await ch.writeValue(bytes.slice(i, i + 20));
+              }
+              return true;
+            }
+          }
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    async function autoTriggerKitchenPrint(logEntry) {
+      if (!state.ownerSettings.autoKotPrint || !logEntry) return;
+      const kotText = `DIGIRES KOT\n${logEntry.tableLabel} (${logEntry.code})\nTime: ${logEntry.time}\n----------------\n${logEntry.summary}\n----------------`;
+      const btOk = await printBluetoothText(kotText);
+      if (btOk) {
+        showToast(`KOT auto-printed on Bluetooth printer (${logEntry.tableLabel})!`);
+      } else if (state.currentView === 'kitchen') {
+        showReceiptModal('KOT', logEntry.code);
+        setTimeout(() => { try { window.print(); } catch (e) {} }, 250);
+      }
+    }
+
+    async function connectBluetoothPrinter() {
+      if (!navigator.bluetooth) {
+        showToast('Web Bluetooth requires Chrome/Android on HTTPS or localhost.');
+        return;
+      }
+      try {
+        btPrinterDevice = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb']
+        });
+        document.getElementById('btPrinterStatus').textContent = `BT: ${btPrinterDevice.name || 'Connected'}`;
+        showToast(`Bluetooth printer "${btPrinterDevice.name || 'Thermal Printer'}" paired!`);
+      } catch (err) {
+        showToast('Bluetooth pairing cancelled or no printer found nearby.');
+      }
+    }
+
+    function setView(viewName) {
+      if (viewName === 'owner' && state.authRole !== 'owner') {
+        openLoginModal('owner');
+        return;
+      }
+      if (viewName === 'admin' && state.authRole !== 'admin') {
+        openLoginModal('admin');
+        return;
+      }
+
+      state.currentView = viewName;
+      document.querySelectorAll('.app-view').forEach(el => el.classList.add('hidden'));
+      const target = document.getElementById('view-' + viewName);
+      if (target) target.classList.remove('hidden');
+
+      document.querySelectorAll('.nav-pill').forEach(btn => {
+        const active = btn.dataset.navView === viewName;
+        btn.className = active
+          ? 'nav-pill rounded-lg bg-[#0f6b30] px-3 py-1.5 text-xs font-bold text-white shadow-sm transition'
+          : 'nav-pill rounded-lg px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-white transition';
+      });
+
+      renderAll();
+    }
+
+    function updateAuthUI() {
+      const badge = document.getElementById('authBadge');
+      const loginBtn = document.getElementById('openLoginBtn');
+      const logoutBtn = document.getElementById('logoutBtn');
+      if (state.authRole === 'admin') {
+        badge.textContent = 'Single Admin (Private)';
+        badge.classList.remove('hidden');
+        loginBtn.textContent = 'Switch / Login';
+        loginBtn.classList.remove('hidden');
+        logoutBtn.classList.remove('hidden');
+      } else if (state.authRole === 'owner') {
+        const owner = getActiveOwner();
+        badge.textContent = `Owner: ${owner.shop}`;
+        badge.classList.remove('hidden');
+        loginBtn.textContent = 'Switch / Login';
+        loginBtn.classList.remove('hidden');
+        logoutBtn.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+        loginBtn.textContent = 'Login / Subscribe';
+        loginBtn.classList.remove('hidden');
+        logoutBtn.classList.add('hidden');
+      }
+    }
+
+    function renderLandingPlans() {
+      const grid = document.getElementById('landingPlansGrid');
+      grid.innerHTML = state.plans.filter(p => p.active).map((p, idx) => `
+        <div class="flex flex-col justify-between rounded-3xl border ${idx === 0 ? 'border-[#0f6b30] bg-emerald-50/40' : 'border-slate-200 bg-white'} p-6 shadow-sm">
+          <div>
+            <span class="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-extrabold text-emerald-800">${p.tag}</span>
+            <h3 class="mt-3 text-lg font-black text-slate-900">${p.name}</h3>
+            <p class="mt-2 text-3xl font-black text-[#0f6b30]">${formatINR(p.price)} <span class="text-xs font-semibold text-slate-500">+ 18% GST / yr</span></p>
+            <ul class="mt-4 space-y-1.5 text-xs font-semibold text-slate-600">
+              ${ALL_FEATURES.map(f => {
+                const ok = p.features ? p.features[f.key] : true;
+                return `<li class="flex items-center gap-2 ${ok ? 'text-slate-800' : 'text-slate-400 line-through'}">
+                  <span>${ok ? '✓' : '✕'}</span> ${f.label}
+                </li>`;
+              }).join('')}
+            </ul>
+          </div>
+          <button type="button" data-open-subscribe="${p.id}" class="mt-6 w-full rounded-xl bg-[#0f6b30] py-2.5 text-xs font-bold text-white hover:bg-[#0a4720]">
+            Subscribe &amp; Unlock Plan
+          </button>
+        </div>
+      `).join('');
+
+      const sel = document.getElementById('subPlanSelect');
+      if (sel) {
+        sel.innerHTML = state.plans.filter(p => p.active).map(p => `<option value="${p.id}">${p.name} (${formatINR(p.price)})</option>`).join('');
+      }
+    }
+
+    function renderCustomerView() {
+      document.getElementById('customerTableQrStrip').innerHTML = state.tables.map(t => `
+        <button type="button" data-scan-table="${t.id}" class="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-left transition hover:border-[#0f6b30] hover:bg-emerald-50">
+          <span class="text-xs font-extrabold text-slate-800">${t.label}</span>
+          <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">QR Active</span>
+        </button>
+      `).join('');
+
+      const session = state.sessions.find(s => s.code === state.activeCustomerCode);
+      const area = document.getElementById('customerSessionArea');
+      const empty = document.getElementById('customerEmptyState');
+
+      if (!session) {
+        area.classList.add('hidden');
+        empty.classList.remove('hidden');
+        return;
+      }
+
+      area.classList.remove('hidden');
+      empty.classList.add('hidden');
+      document.getElementById('custSessionBadge').textContent = `${session.tableLabel} • Verified`;
+
+      const menuList = document.getElementById('customerMenuList');
+      menuList.innerHTML = state.menu.map(m => `
+        <div class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 p-3.5">
+          <div>
+            <p class="text-sm font-extrabold text-slate-900">${m.name}</p>
+            <p class="text-xs text-slate-500">
+              ${m.halfPrice ? `Half: ₹${m.halfPrice} • ` : ''}Full: ₹${m.fullPrice}
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            ${m.halfPrice ? `<button type="button" data-cust-add="${m.id}" data-portion="Half" class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-[#0f6b30] hover:bg-emerald-100">+ Half ₹${m.halfPrice}</button>` : ''}
+            <button type="button" data-cust-add="${m.id}" data-portion="Full" class="rounded-lg bg-[#0f6b30] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#0a4720]">+ Full ₹${m.fullPrice}</button>
+          </div>
+        </div>
+      `).join('');
+
+      const cartEl = document.getElementById('customerCartList');
+      if (state.customerCart.length === 0) {
+        cartEl.innerHTML = '<p class="text-xs text-slate-400">Tap Half or Full on any dish to add items.</p>';
+      } else {
+        cartEl.innerHTML = state.customerCart.map((c, idx) => `
+          <div class="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
+            <span class="text-xs font-bold text-slate-800">${c.name} (${c.portion}) × ${c.qty}</span>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-extrabold text-[#0f6b30]">${formatINR(c.price * c.qty)}</span>
+              <button type="button" data-cust-rem="${idx}" class="text-xs font-bold text-red-600">✕</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      document.getElementById('custOrderStatusPill').textContent = session.status;
+      document.getElementById('custCombinedItems').innerHTML = session.items.length
+        ? session.items.map(i => `
+            <div class="flex justify-between">
+              <span>${i.name} (${i.portion}) × ${i.qty} <span class="text-[10px] text-slate-400">[Order #${i.round}]</span></span>
+              <span class="font-bold">${formatINR(i.price * i.qty)}</span>
+            </div>
+          `).join('')
+        : '<p class="text-slate-400">No orders placed on this code yet.</p>';
+
+      const totals = calcSessionTotals(session);
+      document.getElementById('custGstLabel').textContent = `GST (${totals.rate}%)`;
+      document.getElementById('custSubTotal').textContent = formatINR(totals.sub);
+      document.getElementById('custGstTotal').textContent = formatINR(totals.gst);
+      document.getElementById('custGrandTotal').textContent = formatINR(totals.total);
+
+      document.getElementById('custPaymentBox').classList.toggle('hidden', session.paid || session.items.length === 0);
+      document.getElementById('custPaidBox').classList.toggle('hidden', !session.paid);
+      document.getElementById('placeCustomerOrderBtn').disabled = session.paid;
+    }
+
+    function renderKitchenViews() {
+      const owner = getActiveOwner();
+      const openOrders = state.sessions.filter(s => (s.ownerId || 1) === owner.id && !s.paid && s.items.length > 0);
+      const html = openOrders.length
+        ? openOrders.map(s => `
+            <div class="flex flex-col justify-between rounded-2xl border ${s.status === 'Ready' ? 'border-emerald-300 bg-emerald-50/50' : 'border-amber-300 bg-amber-50/40'} p-4">
+              <div>
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-black text-slate-900">${s.tableLabel} (${s.code})</span>
+                  <span class="rounded-full px-2.5 py-0.5 text-[11px] font-bold ${s.status === 'Ready' ? 'bg-emerald-600 text-white' : 'bg-amber-400 text-slate-950'}">${s.status}</span>
+                </div>
+                <ul class="mt-3 space-y-1 text-xs font-bold text-slate-800">
+                  ${s.items.map(i => `<li>• ${i.qty}x ${i.name} (${i.portion})</li>`).join('')}
+                </ul>
+              </div>
+              <div class="mt-4 flex gap-2">
+                <button type="button" data-kds-status="${s.code}" class="flex-1 rounded-xl bg-white py-2 text-xs font-extrabold text-slate-800 shadow-sm ring-1 ring-slate-200 hover:bg-slate-100">
+                  ${s.status === 'Ready' ? 'Mark Preparing' : 'Mark Ready'}
+                </button>
+                <button type="button" data-print-kot="${s.code}" class="rounded-xl bg-[#0a4720] px-3 py-2 text-xs font-bold text-white hover:bg-[#0f6b30]">
+                  Print 58mm KOT
+                </button>
+              </div>
+            </div>
+          `).join('')
+        : '<p class="text-xs text-slate-400">No active kitchen orders right now.</p>';
+
+      document.getElementById('kitchenDisplayGrid').innerHTML = html;
+
+      const ownerKLogs = state.kitchenPrintLogs.filter(l => (l.ownerId || 1) === owner.id);
+      document.getElementById('kitchenPrintLog').innerHTML = ownerKLogs.length
+        ? ownerKLogs.map(log => `
+            <div class="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+              <div class="flex justify-between font-bold text-slate-800">
+                <span>${log.tableLabel} (${log.code})</span>
+                <span class="text-emerald-700">${log.time}</span>
+              </div>
+              <p class="mt-1 text-[11px] text-slate-600">${log.summary}</p>
+            </div>
+          `).join('')
+        : '<p class="text-slate-400">Waiting for incoming orders...</p>';
+    }
+
+    function renderOwnerDashboard() {
+      const owner = getActiveOwner();
+      const plan = getPlanById(owner.planId);
+      const stoppedBanner = document.getElementById('ownerStoppedBanner');
+      const workspace = document.getElementById('ownerActiveWorkspace');
+
+      if (owner.status !== 'Active') {
+        stoppedBanner.classList.remove('hidden');
+        workspace.classList.add('hidden');
+        document.getElementById('ownerStoppedDesc').textContent =
+          `The subscription for "${owner.shop}" (${plan.name}) is currently STOPPED by the Super Admin.`;
+        return;
+      }
+
+      stoppedBanner.classList.add('hidden');
+      workspace.classList.remove('hidden');
+
+      document.getElementById('ownerRestaurantTitle').textContent = owner.shop;
+      document.getElementById('ownerSubPlanPill').textContent = `${plan.name} • Active till ${owner.validTill}`;
+      document.getElementById('ownerPaymentSummary').textContent =
+        `UPI: ${state.ownerSettings.upiId} • Razorpay: ${state.ownerSettings.razorpayKey}`;
+
+      document.getElementById('ownerUnlockedStrip').innerHTML =
+        '<span class="font-extrabold text-slate-700 mr-1">Subscription Features:</span>' +
+        ALL_FEATURES.map(f => {
+          const unlocked = owner.features && owner.features[f.key];
+          return `<span class="rounded-full px-2.5 py-0.5 font-bold ${unlocked ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'}">${unlocked ? '🔓 ' : '🔒 '}${f.label}</span>`;
+        }).join('');
+
+      document.getElementById('ownerTableCountBadge').textContent = `${state.tables.length} Tables`;
+      document.getElementById('tableCountInput').value = state.tables.length;
+
+      const ownerSessions = state.sessions.filter(s => (s.ownerId || 1) === owner.id);
+      document.getElementById('ownerTableQrsGrid').innerHTML = state.tables.map(t => {
+        const activeSess = ownerSessions.find(s => s.tableId === t.id && !s.paid);
+        return `
+          <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-slate-50/70 p-2.5">
+            <div class="flex items-center justify-between gap-1">
+              <div class="flex items-center gap-2 min-w-0">
+                ${tableQrSvg(t.id)}
+                <div class="min-w-0">
+                  <p class="truncate text-xs font-black text-slate-900">${t.label}</p>
+                  <p class="text-[10px] font-bold text-emerald-700">Active</p>
+                </div>
+              </div>
+              <button type="button" data-print-table-qr="${t.id}" class="rounded bg-white px-1.5 py-1 text-[10px] font-bold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-100">QR</button>
+            </div>
+            <button type="button" data-gen-table-code="${t.id}" class="mt-2 w-full rounded-lg ${activeSess ? 'bg-amber-100 text-amber-900' : 'bg-[#0f6b30] text-white'} py-1 text-[10px] font-extrabold hover:opacity-90">
+              ${activeSess ? `Code: ${activeSess.code}` : '+ Create Code'}
+            </button>
+          </div>
+        `;
+      }).join('');
+
+      document.getElementById('ownerCodesList').innerHTML = ownerSessions.length ? ownerSessions.map(s => `
+        <div class="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2">
+          <div>
+            <p class="text-xs font-black text-slate-900">${s.code} <span class="font-semibold text-slate-500">(${s.tableLabel})</span></p>
+            <p class="text-[10px] font-bold ${s.paid ? 'text-red-600' : 'text-emerald-700'}">${s.paid ? 'Code Expired (Paid) • QR Active' : 'Valid & Active'}</p>
+          </div>
+          <button type="button" data-copy-code="${s.code}" class="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-emerald-100 hover:text-[#0f6b30]">
+            Copy
+          </button>
+        </div>
+      `).join('') : '<p class="text-[11px] text-slate-400">No session codes created yet. Click + Create Code above.</p>';
+
+      const activeOrders = ownerSessions.filter(s => s.items.length > 0 && !s.paid);
+      document.getElementById('ownerLiveOrdersList').innerHTML = activeOrders.length
+        ? activeOrders.map(s => `
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-black text-slate-900">${s.tableLabel} • ${s.code}</span>
+                <span class="rounded-full px-2 py-0.5 text-[10px] font-extrabold ${s.status === 'Ready' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'}">${s.status}</span>
+              </div>
+              <ul class="mt-2 space-y-1 text-xs text-slate-700">
+                ${s.items.map(i => `<li>• ${i.qty}x ${i.name} (${i.portion}) — ${formatINR(i.price * i.qty)}</li>`).join('')}
+              </ul>
+            </div>
+          `).join('')
+        : '<p class="text-xs text-slate-400">No active customer orders right now.</p>';
+
+      const billedSessions = ownerSessions.filter(s => s.items.length > 0);
+      document.getElementById('ownerBillingList').innerHTML = billedSessions.length ? billedSessions.map(s => {
+        const t = calcSessionTotals(s);
+        return `
+          <div class="rounded-2xl border border-slate-200 p-3.5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-black text-slate-900">${s.tableLabel} • ${s.code}</span>
+              <span class="text-xs font-black text-[#0f6b30]">${formatINR(t.total)}</span>
+            </div>
+            <p class="mt-1 text-[11px] text-slate-500">${s.items.length} item lines • ${s.paid ? 'PAID (' + s.paymentMethod + ')' : 'Unpaid'}</p>
+            <div class="mt-3 flex flex-wrap gap-1.5">
+              ${!s.paid ? `
+                <button type="button" data-owner-pay="${s.code}" data-pay-method="Cash" class="flex-1 rounded-lg bg-amber-400 py-1.5 text-[10px] font-black text-slate-950 hover:bg-amber-300">Cash</button>
+                <button type="button" data-owner-pay="${s.code}" data-pay-method="UPI" class="flex-1 rounded-lg bg-[#0f6b30] py-1.5 text-[10px] font-bold text-white hover:bg-[#0a4720]">UPI</button>
+                <button type="button" data-owner-pay="${s.code}" data-pay-method="Razorpay" class="flex-1 rounded-lg bg-slate-900 py-1.5 text-[10px] font-bold text-white hover:bg-slate-800">Razorpay</button>
+              ` : ''}
+              <button type="button" data-view-bill="${s.code}" class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-slate-100">58mm Receipt</button>
+            </div>
+          </div>
+        `;
+      }).join('') : '<p class="text-xs text-slate-400">No bills yet.</p>';
+
+      document.getElementById('ownerMenuTable').innerHTML = state.menu.map(m => `
+        <div class="flex items-center justify-between rounded-2xl border border-slate-200 p-3.5">
+          <div>
+            <p class="text-sm font-extrabold text-slate-900">${m.name}</p>
+            <p class="text-xs text-slate-500">${m.halfPrice ? `Half: ₹${m.halfPrice} | ` : ''}Full: ₹${m.fullPrice}</p>
+          </div>
+          <button type="button" data-del-menu="${m.id}" class="rounded-lg bg-red-50 px-2.5 py-1 text-xs font-bold text-red-600 hover:bg-red-100">Delete</button>
+        </div>
+      `).join('');
+
+      document.getElementById('setRestName').value = owner.shop;
+      document.getElementById('setUpiId').value = state.ownerSettings.upiId;
+      document.getElementById('setRazorpayKey').value = state.ownerSettings.razorpayKey;
+      document.getElementById('setGstPercent').value = getGstRate();
+      document.getElementById('setAutoKotPrint').checked = state.ownerSettings.autoKotPrint;
+      document.getElementById('setAutoOwnerPrint').checked = state.ownerSettings.autoOwnerPrint;
+    }
+
+    function renderAdminPanel() {
+      const activeCount = state.owners.filter(o => o.status === 'Active').length;
+      const stoppedCount = state.owners.length - activeCount;
+      const totalRev = state.paymentLogs.reduce((s, p) => s + p.amount, 0);
+
+      document.getElementById('adminKpis').innerHTML = `
+        <div class="rounded-2xl bg-white/10 px-4 py-2">
+          <p class="text-[10px] font-bold uppercase text-slate-300">Owners</p>
+          <p class="text-lg font-black">${state.owners.length}</p>
+        </div>
+        <div class="rounded-2xl bg-emerald-500/20 px-4 py-2">
+          <p class="text-[10px] font-bold uppercase text-emerald-200">Live Active</p>
+          <p class="text-lg font-black text-emerald-300">${activeCount}</p>
+        </div>
+        <div class="rounded-2xl bg-red-500/20 px-4 py-2">
+          <p class="text-[10px] font-bold uppercase text-red-200">Stopped</p>
+          <p class="text-lg font-black text-red-300">${stoppedCount}</p>
+        </div>
+        <div class="rounded-2xl bg-amber-400/20 px-4 py-2">
+          <p class="text-[10px] font-bold uppercase text-amber-200">Live Payments</p>
+          <p class="text-lg font-black text-amber-300">${formatINR(totalRev)}</p>
+        </div>
+      `;
+
+      document.getElementById('adminOwnersList').innerHTML = state.owners.map(o => `
+        <div class="rounded-2xl border ${o.status === 'Active' ? 'border-slate-200 bg-white' : 'border-red-200 bg-red-50/40'} p-4">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <h4 class="text-sm font-black text-slate-900">${o.shop}</h4>
+                <span class="rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${o.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-700'}">
+                  ${o.status}
+                </span>
+              </div>
+              <p class="text-xs text-slate-500">${o.owner} (${o.email}) • Valid till ${o.validTill}</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <button type="button" data-admin-impersonate="${o.id}" class="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-slate-100">
+                Check Owner
+              </button>
+              <button type="button" data-toggle-owner="${o.id}" class="rounded-lg px-3 py-1.5 text-[11px] font-extrabold text-white ${o.status === 'Active' ? 'bg-red-600 hover:bg-red-700' : 'bg-[#0f6b30] hover:bg-[#0a4720]'}">
+                ${o.status === 'Active' ? 'Stop Subscription' : 'Activate Live'}
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] font-bold text-slate-600">Plan:</span>
+              <select data-admin-plan-select="${o.id}" class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold">
+                ${state.plans.map(p => `<option value="${p.id}" ${p.id === o.planId ? 'selected' : ''}>${p.name}</option>`).join('')}
+              </select>
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+              ${ALL_FEATURES.map(f => {
+                const on = o.features && o.features[f.key];
+                return `<button type="button" data-admin-feat-owner="${o.id}" data-admin-feat-key="${f.key}" class="rounded-md px-2 py-1 text-[10px] font-bold ${on ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-400'}">${on ? '✓ ' : '✕ '}${f.label}</button>`;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      document.getElementById('adminLivePaymentsList').innerHTML = state.paymentLogs.length
+        ? state.paymentLogs.map(p => `
+            <div class="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <div>
+                <p class="font-bold text-slate-900">${p.tableLabel} (${p.code}) • ${p.method}</p>
+                <p class="text-[10px] text-slate-500">${p.time}</p>
+              </div>
+              <span class="font-black text-[#0f6b30]">${formatINR(p.amount)}</span>
+            </div>
+          `).join('')
+        : '<p class="text-slate-400">No payments recorded yet. Complete a UPI, Razorpay, or Cash payment to see it live here.</p>';
+
+      const admPay = state.adminPaymentSettings || { upiId: 'admin.digires@okicici', razorpayKey: 'rzp_live_admin_digires', autoActivateOnPay: true };
+      document.getElementById('adminSetUpiId').value = admPay.upiId;
+      document.getElementById('adminSetRazorpayKey').value = admPay.razorpayKey;
+      document.getElementById('adminSetAutoActivate').checked = admPay.autoActivateOnPay !== false;
+      const subPrev = document.getElementById('subAdminPayPreview');
+      if (subPrev) subPrev.textContent = `UPI: ${admPay.upiId} • Razorpay: ${admPay.razorpayKey}`;
+
+      document.getElementById('adminPlansList').innerHTML = state.plans.map(p => `
+        <div class="flex items-center justify-between rounded-2xl border border-slate-200 p-3.5">
+          <div>
+            <p class="text-sm font-extrabold text-slate-900">${p.name} — ${formatINR(p.price)}</p>
+            <p class="text-xs text-slate-500">${p.tag}</p>
+          </div>
+          <button type="button" data-toggle-plan="${p.id}" class="rounded-lg px-3 py-1.5 text-xs font-bold ${p.active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}">
+            ${p.active ? 'Live' : 'Hidden'}
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function renderAll() {
+      pruneOldBillingHistory(state);
+      updateAuthUI();
+      renderLandingPlans();
+      renderCustomerView();
+      renderKitchenViews();
+      renderOwnerDashboard();
+      renderAdminPanel();
+      lucide.createIcons();
+    }
+
+    function showTableQrModal(tableId) {
+      const owner = getActiveOwner();
+      const url = getTableUrl(tableId);
+      document.getElementById('qrModalShop').textContent = owner.shop;
+      document.getElementById('qrModalTableTitle').textContent = `Table ${tableId} — Scan to Order`;
+      document.getElementById('qrModalUrl').textContent = url;
+      const qrBox = document.getElementById('qrModalRender');
+      qrBox.innerHTML = '';
+      if (typeof QRCode !== 'undefined') {
+        new QRCode(qrBox, { text: url, width: 160, height: 160 });
+      } else {
+        qrBox.innerHTML = tableQrSvg(tableId);
+      }
+      const m = document.getElementById('tableQrPrintModal');
+      m.classList.remove('hidden');
+      m.classList.add('flex');
+    }
+
+    function showReceiptModal(type, code) {
+      const s = state.sessions.find(x => x.code === code);
+      if (!s) return;
+      activeReceiptCode = code;
+      const t = calcSessionTotals(s);
+      const owner = getActiveOwner();
+      const area = document.getElementById('receiptPrintArea');
+
+      if (type === 'KOT') {
+        area.innerHTML = `
+          <div class="text-center border-b border-dashed border-slate-400 pb-2">
+            <p class="font-black text-sm">KITCHEN ORDER TICKET (KOT)</p>
+            <p>${owner.shop}</p>
+            <p>${s.tableLabel} | Code: ${s.code}</p>
+          </div>
+          <div class="my-3 space-y-1">
+            ${s.items.map(i => `<div class="flex justify-between font-bold"><span>${i.qty}x ${i.name} (${i.portion})</span><span>#R${i.round}</span></div>`).join('')}
+          </div>
+          <p class="border-t border-dashed border-slate-400 pt-2 text-center text-[11px]">58mm Kitchen Thermal Print</p>
+        `;
+      } else {
+        area.innerHTML = `
+          <div class="text-center border-b border-dashed border-slate-400 pb-2">
+            <p class="font-black text-sm">${owner.shop}</p>
+            <p>OWNER TAX INVOICE / RECEIPT</p>
+            <p>${s.tableLabel} | Code: ${s.code}</p>
+          </div>
+          <div class="my-3 space-y-1">
+            ${s.items.map(i => `<div class="flex justify-between"><span>${i.qty}x ${i.name} (${i.portion})</span><span>${formatINR(i.price * i.qty)}</span></div>`).join('')}
+          </div>
+          <div class="border-t border-dashed border-slate-400 pt-2 space-y-1">
+            <div class="flex justify-between"><span>Subtotal</span><span>${formatINR(t.sub)}</span></div>
+            <div class="flex justify-between"><span>GST (${t.rate}%)</span><span>${formatINR(t.gst)}</span></div>
+            <div class="flex justify-between font-black text-sm"><span>TOTAL</span><span>${formatINR(t.total)}</span></div>
+            <p class="pt-1 text-[11px]">Status: ${s.paid ? 'PAID via ' + s.paymentMethod : 'UNPAID'}</p>
+          </div>
+        `;
+      }
+
+      const m = document.getElementById('receiptModal');
+      m.classList.remove('hidden');
+      m.classList.add('flex');
+    }
+
+    function openLoginModal(role, preselectPlanId) {
+      state.loginRoleTab = role || 'owner';
+      document.querySelectorAll('.login-role-btn').forEach(b => {
+        const act = b.dataset.loginRole === state.loginRoleTab;
+        b.className = act
+          ? 'login-role-btn rounded-lg bg-[#0f6b30] py-2 text-[11px] font-bold text-white'
+          : 'login-role-btn rounded-lg py-2 text-[11px] font-bold text-slate-600';
+      });
+      const isSub = state.loginRoleTab === 'subscribe';
+      document.getElementById('loginForm').classList.toggle('hidden', isSub);
+      document.getElementById('subscribeForm').classList.toggle('hidden', !isSub);
+      document.getElementById('forgotPasswordForm').classList.add('hidden');
+      document.getElementById('subSuccessBox').classList.add('hidden');
+      document.getElementById('ownerDemoBox').classList.toggle('hidden', state.loginRoleTab === 'admin');
+      if (preselectPlanId) {
+        const sel = document.getElementById('subPlanSelect');
+        if (sel) sel.value = String(preselectPlanId);
+      }
+      const m = document.getElementById('loginModal');
+      m.classList.remove('hidden');
+      m.classList.add('flex');
+    }
+
+    function closeLoginModal() {
+      const m = document.getElementById('loginModal');
+      m.classList.add('hidden');
+      m.classList.remove('flex');
+    }
+
+    function openPaymentGateway(method) {
+      const s = state.sessions.find(x => x.code === state.activeCustomerCode);
+      if (!s || s.paid) return;
+      const t = calcSessionTotals(s);
+      const owner = getActiveOwner();
+      state.pendingPayMethod = method;
+
+      // Use Razorpay Checkout for both UPI (exact amount + auto-verify) and Razorpay when rzp_ key is set
+      const rzpKey = (state.ownerSettings.razorpayKey || '').trim();
+      const isRealKey = rzpKey.startsWith('rzp_live_') || (rzpKey.startsWith('rzp_test_') && rzpKey !== 'rzp_test_digires99');
+      if ((method === 'Razorpay' || method === 'UPI') && isRealKey && typeof Razorpay !== 'undefined') {
+        try {
+          const options = {
+            key: rzpKey,
+            amount: Math.round(t.total * 100),
+            currency: 'INR',
+            name: owner.shop,
+            description: `Table Bill (${s.code})`,
+            handler: function (response) {
+              if (!response || !response.razorpay_payment_id) {
+                showToast('Payment not confirmed. Bill remains unpaid.');
+                return;
+              }
+              finalizePayment(s, `${method} (${response.razorpay_payment_id})`);
+              showToast(`Payment verified! ID: ${response.razorpay_payment_id}`);
+            },
+            modal: {
+              ondismiss: function () {
+                showToast('Payment cancelled. Bill is still unpaid.');
+              }
+            },
+            theme: { color: '#0f6b30' }
+          };
+          if (method === 'UPI') {
+            options.config = {
+              display: {
+                blocks: { upi: { name: 'Pay via UPI', instruments: [{ method: 'upi' }] } },
+                sequence: ['block.upi'],
+                preferences: { show_default_blocks: false }
+              }
+            };
+          }
+          const rzp = new Razorpay(options);
+          rzp.on('payment.failed', function () {
+            showToast('Payment failed! Money not received, bill remains unpaid.');
+          });
+          rzp.open();
+          return;
+        } catch (err) {}
+      }
+
+      document.getElementById('payModalMethodBadge').textContent = method;
+      document.getElementById('payModalAmount').textContent = formatINR(t.total);
+
+      const details = document.getElementById('payModalDetails');
+      const qrBox = document.getElementById('upiQrBox');
+      const upiLink = document.getElementById('upiDeepLinkBtn');
+      qrBox.innerHTML = '';
+      upiLink.classList.add('hidden');
+
+      if (method === 'UPI') {
+        const cleanShop = owner.shop.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'DigiRes';
+        const upiUrl = `upi://pay?pa=${encodeURIComponent(state.ownerSettings.upiId.trim())}&pn=${encodeURIComponent(cleanShop)}&cu=INR`;
+        details.innerHTML = `<p class="font-bold">Scan QR or tap below &amp; enter <span class="text-[#0f6b30]">${formatINR(t.total)}</span> in GPay / PhonePe / Paytm:</p><p class="mt-1 font-mono text-xs font-black text-[#0f6b30]">${state.ownerSettings.upiId}</p>`;
+        if (typeof QRCode !== 'undefined') {
+          new QRCode(qrBox, { text: upiUrl, width: 140, height: 140 });
+        }
+        upiLink.href = upiUrl;
+        upiLink.classList.remove('hidden');
+      } else if (method === 'Razorpay') {
+        details.innerHTML = `<p class="font-bold">Razorpay Checkout:</p><p class="mt-1 text-[11px]">Merchant Key: ${state.ownerSettings.razorpayKey}</p><p class="mt-1 text-[11px]">Supports UPI, Cards &amp; Netbanking</p>`;
+      } else {
+        details.innerHTML = `<p class="font-bold">Cash Payment at Counter</p><p class="mt-1 text-[11px]">Pay ${formatINR(t.total)} cash to the Owner / Cashier to close your table bill.</p>`;
+      }
+
+      const m = document.getElementById('paymentGatewayModal');
+      m.classList.remove('hidden');
+      m.classList.add('flex');
+    }
+
+    function finalizePayment(session, method) {
+      const t = calcSessionTotals(session);
+      const phone = document.getElementById('custWhatsappInput') ? document.getElementById('custWhatsappInput').value.trim() : '';
+      session.paid = true;
+      session.paidAt = Date.now();
+      session.status = 'Paid';
+      session.paymentMethod = method;
+      if (phone) session.whatsappNumber = phone;
+
+      state.paymentLogs.unshift({
+        id: Date.now(),
+        createdAt: Date.now(),
+        code: session.code,
+        tableLabel: session.tableLabel,
+        method,
+        amount: t.total,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      });
+      saveState();
+      renderAll();
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      // Check URL ?table=N (Customer QR Scan Mode!)
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const tableParam = params.get('table');
+        if (tableParam) {
+          document.getElementById('mainHeader').classList.add('hidden');
+          document.getElementById('custTableStripWrap').classList.add('hidden');
+          document.getElementById('custTableBadge').textContent = `Table ${tableParam} QR Scanned`;
+          document.getElementById('custScanHint').innerHTML =
+            `<strong class="text-[#0f6b30]">Welcome to Table ${tableParam}!</strong> Enter the Session Code given by the Owner to open your menu.`;
+          setView('customer');
+        } else {
+          renderAll();
+        }
+      } catch (e) {
+        renderAll();
+      }
+
+      document.body.addEventListener('click', (e) => {
+        const navBtn = e.target.closest('[data-nav-view]');
+        if (navBtn) {
+          document.getElementById('mobileNav').classList.add('hidden');
+          return setView(navBtn.dataset.navView);
+        }
+
+        const openLoginTab = e.target.closest('[data-open-login-tab]');
+        if (openLoginTab) return openLoginModal(openLoginTab.dataset.openLoginTab);
+
+        const openSub = e.target.closest('[data-open-subscribe]');
+        if (openSub) return openLoginModal('subscribe', openSub.dataset.openSubscribe);
+
+        const scanTable = e.target.closest('[data-scan-table]');
+        if (scanTable) {
+          const tableId = Number(scanTable.dataset.scanTable);
+          document.getElementById('custScanHint').innerHTML =
+            `<strong class="text-[#0f6b30]">Table ${tableId} QR Scanned!</strong> Enter the Session Code provided by the Owner to open the menu.`;
+          document.getElementById('customerCodeInput').focus();
+          showToast(`Table ${tableId} QR scanned! Enter Owner's Session Code.`);
+          return;
+        }
+
+        const printQr = e.target.closest('[data-print-table-qr]');
+        if (printQr) return showTableQrModal(Number(printQr.dataset.printTableQr));
+
+        const copyCode = e.target.closest('[data-copy-code]');
+        if (copyCode) {
+          const code = copyCode.dataset.copyCode;
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(code).catch(() => {});
+          }
+          showToast(`Copied code ${code} to share with customer!`);
+          return;
+        }
+
+        const custAdd = e.target.closest('[data-cust-add]');
+        if (custAdd) {
+          const item = state.menu.find(m => m.id === Number(custAdd.dataset.custAdd));
+          const portion = custAdd.dataset.portion;
+          const price = portion === 'Half' ? item.halfPrice : item.fullPrice;
+          const existing = state.customerCart.find(c => c.id === item.id && c.portion === portion);
+          if (existing) existing.qty++;
+          else state.customerCart.push({ id: item.id, name: item.name, portion, price, qty: 1 });
+          renderCustomerView();
+          return;
+        }
+
+        const custRem = e.target.closest('[data-cust-rem]');
+        if (custRem) {
+          state.customerCart.splice(Number(custRem.dataset.custRem), 1);
+          renderCustomerView();
+          return;
+        }
+
+        const kdsToggle = e.target.closest('[data-kds-status]');
+        if (kdsToggle) {
+          const s = state.sessions.find(x => x.code === kdsToggle.dataset.kdsStatus);
+          if (s) {
+            s.status = s.status === 'Ready' ? 'Preparing' : 'Ready';
+            saveState();
+            renderAll();
+            showToast(`${s.code} marked ${s.status}`);
+          }
+          return;
+        }
+
+        const printKot = e.target.closest('[data-print-kot]');
+        if (printKot) return showReceiptModal('KOT', printKot.dataset.printKot);
+
+        const viewBill = e.target.closest('[data-view-bill]');
+        if (viewBill) return showReceiptModal('BILL', viewBill.dataset.viewBill);
+
+        const genTableCode = e.target.closest('[data-gen-table-code]');
+        if (genTableCode) {
+          const tableId = Number(genTableCode.dataset.genTableCode);
+          const owner = getActiveOwner();
+          const existing = state.sessions.find(s => (s.ownerId || 1) === owner.id && s.tableId === tableId && !s.paid);
+          if (existing) {
+            showToast(`Table ${tableId} already has active code: ${existing.code}`);
+            return;
+          }
+          const code = `T${tableId}-${Math.floor(100 + Math.random() * 900)}`;
+          state.sessions.unshift({
+            ownerId: owner.id,
+            code,
+            tableId,
+            tableLabel: `Table ${tableId}`,
+            status: 'Active',
+            paid: false,
+            paymentMethod: null,
+            whatsappNumber: '',
+            items: [],
+            rounds: 0
+          });
+          saveState();
+          renderAll();
+          showToast(`New code ${code} created for Table ${tableId}!`);
+          return;
+        }
+
+        const ownerPay = e.target.closest('[data-owner-pay]');
+        if (ownerPay) {
+          const s = state.sessions.find(x => x.code === ownerPay.dataset.ownerPay);
+          const method = ownerPay.dataset.payMethod;
+          if (s) {
+            finalizePayment(s, method);
+            if (state.ownerSettings.autoOwnerPrint) showReceiptModal('BILL', s.code);
+            showToast(`Paid via ${method}! Code ${s.code} expired; ${s.tableLabel} QR stays active.`);
+          }
+          return;
+        }
+
+        const delMenu = e.target.closest('[data-del-menu]');
+        if (delMenu) {
+          state.menu = state.menu.filter(m => m.id !== Number(delMenu.dataset.delMenu));
+          saveState();
+          renderAll();
+          return;
+        }
+
+        const togglePlan = e.target.closest('[data-toggle-plan]');
+        if (togglePlan) {
+          const p = state.plans.find(x => x.id === Number(togglePlan.dataset.togglePlan));
+          if (p) { p.active = !p.active; saveState(); renderAll(); }
+          return;
+        }
+
+        const toggleOwner = e.target.closest('[data-toggle-owner]');
+        if (toggleOwner) {
+          const o = state.owners.find(x => x.id === Number(toggleOwner.dataset.toggleOwner));
+          if (o) {
+            o.status = o.status === 'Active' ? 'Stopped' : 'Active';
+            saveState();
+            renderAll();
+            showToast(`${o.shop} subscription is now ${o.status}!`);
+          }
+          return;
+        }
+
+        const adminFeat = e.target.closest('[data-admin-feat-owner]');
+        if (adminFeat) {
+          const o = state.owners.find(x => x.id === Number(adminFeat.dataset.adminFeatOwner));
+          const key = adminFeat.dataset.adminFeatKey;
+          if (o) {
+            if (!o.features) o.features = {};
+            o.features[key] = !o.features[key];
+            saveState();
+            renderAll();
+            showToast(`Updated feature access for ${o.shop}`);
+          }
+          return;
+        }
+
+        const impBtn = e.target.closest('[data-admin-impersonate]');
+        if (impBtn) {
+          state.activeOwnerId = Number(impBtn.dataset.adminImpersonate);
+          state.authRole = 'owner';
+          saveState();
+          setView('owner');
+          showToast(`Viewing Owner Dashboard for ${getActiveOwner().shop}`);
+          return;
+        }
+      });
+
+      document.body.addEventListener('change', (e) => {
+        const planSel = e.target.closest('[data-admin-plan-select]');
+        if (planSel) {
+          const o = state.owners.find(x => x.id === Number(planSel.dataset.adminPlanSelect));
+          const newPlan = getPlanById(Number(planSel.value));
+          if (o && newPlan) {
+            o.planId = newPlan.id;
+            o.features = { ...(newPlan.features || { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: true }) };
+            saveState();
+            renderAll();
+            showToast(`${o.shop} moved to ${newPlan.name}`);
+          }
+        }
+      });
+
+      document.getElementById('mobileMenuBtn').addEventListener('click', () => {
+        document.getElementById('mobileNav').classList.toggle('hidden');
+      });
+
+      document.getElementById('openLoginBtn').addEventListener('click', () => openLoginModal('owner'));
+      document.getElementById('closeLoginBtn').addEventListener('click', closeLoginModal);
+      document.getElementById('logoutBtn').addEventListener('click', () => {
+        state.authRole = null;
+        saveState();
+        setView('landing');
+        showToast('Logged out successfully.');
+      });
+
+      document.querySelectorAll('.login-role-btn').forEach(b => {
+        b.addEventListener('click', () => openLoginModal(b.dataset.loginRole));
+      });
+
+      document.getElementById('instantOwnerLoginBtn').addEventListener('click', () => {
+        state.authRole = 'owner';
+        state.activeOwnerId = state.owners[0].id;
+        saveState();
+        closeLoginModal();
+        setView('owner');
+        showToast('Logged in as Owner!');
+      });
+
+      document.getElementById('openForgotBtn').addEventListener('click', () => {
+        document.getElementById('loginForm').classList.add('hidden');
+        document.getElementById('subscribeForm').classList.add('hidden');
+        document.getElementById('forgotPasswordForm').classList.remove('hidden');
+      });
+
+      document.getElementById('subToLoginBtn').addEventListener('click', () => openLoginModal('owner'));
+      document.getElementById('goToLoginAfterSubBtn').addEventListener('click', () => openLoginModal('owner'));
+
+      document.getElementById('backToLoginBtn').addEventListener('click', () => {
+        document.getElementById('forgotPasswordForm').classList.add('hidden');
+        document.getElementById('loginForm').classList.remove('hidden');
+      });
+
+      document.getElementById('forgotPasswordForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const email = document.getElementById('forgotEmail').value.trim().toLowerCase();
+        const verify = document.getElementById('forgotVerify').value.trim();
+        const newPass = document.getElementById('forgotNewPass').value;
+
+        if (email === ADMIN_EMAIL) {
+          if (verify !== ADMIN_RECOVERY_PIN) {
+            return showToast('Invalid Admin Recovery PIN!');
+          }
+          state.adminPass = newPass;
+          saveState();
+          e.target.reset();
+          openLoginModal('admin');
+          return showToast('Admin password updated! Please sign in.');
+        }
+
+        const owner = state.owners.find(o => (o.email || '').trim().toLowerCase() === email);
+        if (!owner) {
+          return showToast('No Owner account found with that email. Please Sign Up first.');
+        }
+        owner.password = newPass.trim();
+        saveState();
+        e.target.reset();
+        openLoginModal('owner');
+        document.getElementById('loginEmail').value = email;
+        showToast(`Password updated for ${owner.shop}! Now sign in with your new password.`);
+      });
+
+      document.getElementById('loginForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const email = document.getElementById('loginEmail').value.trim().toLowerCase();
+        const pass = document.getElementById('loginPassword').value.trim();
+        if (state.loginRoleTab === 'admin') {
+          const currentAdminPass = state.adminPass || ADMIN_DEFAULT_PASS;
+          if (email !== ADMIN_EMAIL || pass !== currentAdminPass) {
+            return showToast('Invalid Private Admin credentials!');
+          }
+          state.authRole = 'admin';
+        } else {
+          const byEmail = state.owners.find(o => (o.email || '').trim().toLowerCase() === email);
+          if (!byEmail) {
+            return showToast('Email not registered! Please Sign Up in New Subscribe tab.');
+          }
+          if ((byEmail.password || 'owner123') !== pass) {
+            return showToast('Wrong password! Try again or click Forgot Password.');
+          }
+          state.activeOwnerId = byEmail.id;
+          state.authRole = 'owner';
+        }
+        saveState();
+        closeLoginModal();
+        setView(state.authRole);
+        showToast(`Welcome! Logged in as ${state.authRole.toUpperCase()}.`);
+      });
+
+      document.getElementById('subscribeForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const ownerName = document.getElementById('subOwnerName').value.trim();
+        const shop = document.getElementById('subShopName').value.trim();
+        const email = document.getElementById('subEmail').value.trim().toLowerCase();
+        const password = document.getElementById('subPassword').value.trim();
+        const dupIdx = state.owners.findIndex(o => (o.email || '').trim().toLowerCase() === email);
+        if (dupIdx !== -1) state.owners.splice(dupIdx, 1);
+        const planId = Number(document.getElementById('subPlanSelect').value);
+        const plan = getPlanById(planId);
+
+        const newOwner = {
+          id: Date.now(),
+          shop,
+          owner: ownerName,
+          email,
+          password,
+          planId: plan.id,
+          status: 'Active',
+          validTill: '2027-11-24',
+          features: { ...(plan.features || { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: true }) }
+        };
+        const admPay = state.adminPaymentSettings || { autoActivateOnPay: true };
+        newOwner.status = admPay.autoActivateOnPay !== false ? 'Active' : 'Stopped';
+        state.paymentLogs.unshift({
+          id: Date.now(),
+          code: 'SUBSCRIPTION',
+          tableLabel: shop,
+          method: 'Admin UPI / Razorpay',
+          amount: Math.round(plan.price * 1.18),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        state.owners.unshift(newOwner);
+        state.activeOwnerId = newOwner.id;
+        e.target.reset();
+        saveState();
+        renderAll();
+        document.getElementById('subscribeForm').classList.add('hidden');
+        document.getElementById('subSuccessText').textContent = `Account created for ${shop} (${email}). Click below to Login.`;
+        document.getElementById('subSuccessBox').classList.remove('hidden');
+        document.getElementById('loginEmail').value = email;
+        document.getElementById('loginPassword').value = '';
+        showToast(`Sign Up successful for ${shop}! Click Login Now.`);
+      });
+
+      document.getElementById('adjustTablesForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const cnt = Math.max(1, Math.min(50, Number(document.getElementById('tableCountInput').value) || 7));
+        state.tableCount = cnt;
+        state.tables = buildTables(cnt);
+        saveState();
+        renderAll();
+        showToast(`Updated to ${cnt} separate Table QRs!`);
+      });
+
+      document.getElementById('verifyCodeBtn').addEventListener('click', () => {
+        const code = document.getElementById('customerCodeInput').value.trim().toUpperCase();
+        const found = state.sessions.find(s => s.code === code);
+        if (!found) return showToast('Invalid Session Code! Ask Owner for a valid code.');
+        if (found.paid) return showToast('This code is already paid and expired.');
+        state.activeCustomerCode = code;
+        state.customerCart = [];
+        renderCustomerView();
+        showToast(`${found.tableLabel} menu unlocked!`);
+      });
+
+      document.getElementById('placeCustomerOrderBtn').addEventListener('click', () => {
+        const s = state.sessions.find(x => x.code === state.activeCustomerCode);
+        if (!s || s.paid) return showToast('Session expired.');
+        if (state.customerCart.length === 0) return showToast('Add items before ordering.');
+
+        s.rounds = (s.rounds || 0) + 1;
+        const summaryParts = [];
+        state.customerCart.forEach(c => {
+          s.items.push({ name: c.name, portion: c.portion, price: c.price, qty: c.qty, round: s.rounds });
+          summaryParts.push(`${c.qty}x ${c.name} (${c.portion})`);
+        });
+        s.status = 'Preparing';
+
+        const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        state.kitchenPrintLogs.unshift({
+          id: Date.now(),
+          ownerId: s.ownerId || getActiveOwner().id,
+          time: nowStr,
+          code: s.code,
+          tableLabel: s.tableLabel,
+          summary: summaryParts.join(', ')
+        });
+
+        state.customerCart = [];
+        saveState();
+        renderAll();
+        showToast(`Order #${s.rounds} sent to Kitchen & Owner! KOT auto-printed in Kitchen.`);
+      });
+
+      document.getElementById('custPayUpiBtn').addEventListener('click', () => openPaymentGateway('UPI'));
+      document.getElementById('custPayRazorpayBtn').addEventListener('click', () => openPaymentGateway('Razorpay'));
+      document.getElementById('custPayCashBtn').addEventListener('click', () => openPaymentGateway('Cash'));
+
+      document.getElementById('closePayModalBtn').addEventListener('click', () => {
+        document.getElementById('paymentGatewayModal').classList.add('hidden');
+        document.getElementById('paymentGatewayModal').classList.remove('flex');
+      });
+
+      document.getElementById('confirmLivePayBtn').addEventListener('click', () => {
+        const s = state.sessions.find(x => x.code === state.activeCustomerCode);
+        if (s && !s.paid) {
+          finalizePayment(s, state.pendingPayMethod || 'UPI');
+          showToast(`Payment via ${state.pendingPayMethod} successful! Code ${s.code} expired.`);
+        }
+        document.getElementById('paymentGatewayModal').classList.add('hidden');
+        document.getElementById('paymentGatewayModal').classList.remove('flex');
+      });
+
+      document.getElementById('custSendWaBtn').addEventListener('click', () => {
+        const s = state.sessions.find(x => x.code === state.activeCustomerCode);
+        sendBillToWhatsApp(s);
+      });
+
+      document.getElementById('ownerWaReceiptBtn').addEventListener('click', () => {
+        const s = state.sessions.find(x => x.code === activeReceiptCode);
+        sendBillToWhatsApp(s);
+      });
+
+      document.querySelectorAll('.owner-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.owner-tab-btn').forEach(b => b.className = 'owner-tab-btn rounded-xl bg-slate-100 px-4 py-2 text-xs font-bold text-slate-700');
+          btn.className = 'owner-tab-btn rounded-xl bg-[#0f6b30] px-4 py-2 text-xs font-bold text-white';
+          document.querySelectorAll('.owner-tab-content').forEach(c => c.classList.add('hidden'));
+          document.getElementById('ownerTab-' + btn.dataset.ownerTab).classList.remove('hidden');
+        });
+      });
+
+      document.getElementById('addMenuForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = document.getElementById('menuNameInput').value.trim();
+        const halfVal = document.getElementById('menuHalfInput').value;
+        const fullVal = Number(document.getElementById('menuFullInput').value);
+        state.menu.push({
+          id: Date.now(),
+          name,
+          halfPrice: halfVal ? Number(halfVal) : null,
+          fullPrice: fullVal
+        });
+        e.target.reset();
+        saveState();
+        renderAll();
+        showToast(`${name} added to menu!`);
+      });
+
+      document.getElementById('adminPaymentSettingsForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        state.adminPaymentSettings = {
+          upiId: document.getElementById('adminSetUpiId').value.trim(),
+          razorpayKey: document.getElementById('adminSetRazorpayKey').value.trim(),
+          autoActivateOnPay: document.getElementById('adminSetAutoActivate').checked
+        };
+        saveState();
+        renderAll();
+        showToast('Admin UPI & Razorpay settings saved!');
+      });
+
+      document.getElementById('ownerSettingsForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const owner = getActiveOwner();
+        owner.shop = document.getElementById('setRestName').value.trim();
+        state.ownerSettings.upiId = document.getElementById('setUpiId').value.trim();
+        state.ownerSettings.razorpayKey = document.getElementById('setRazorpayKey').value.trim();
+        state.ownerSettings.gstPercent = Math.max(0, Math.min(28, Number(document.getElementById('setGstPercent').value) || 0));
+        state.ownerSettings.autoKotPrint = document.getElementById('setAutoKotPrint').checked;
+        state.ownerSettings.autoOwnerPrint = document.getElementById('setAutoOwnerPrint').checked;
+        saveState();
+        renderAll();
+        showToast('Owner UPI, Razorpay & Printer settings saved!');
+      });
+
+      document.getElementById('addPlanForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        state.plans.push({
+          id: Date.now(),
+          name: document.getElementById('planNameInput').value.trim(),
+          price: Number(document.getElementById('planPriceInput').value),
+          tag: document.getElementById('planTagInput').value.trim(),
+          active: true,
+          features: { qrOrdering: true, kds: true, whatsappBill: true, autoPrinter: true }
+        });
+        e.target.reset();
+        saveState();
+        renderAll();
+        showToast('New subscription plan published to Home Page!');
+      });
+
+      document.getElementById('connectBtKitchenBtn').addEventListener('click', connectBluetoothPrinter);
+      document.getElementById('connectBtOwnerBtn').addEventListener('click', connectBluetoothPrinter);
+
+      document.getElementById('closeQrModalBtn').addEventListener('click', () => {
+        document.getElementById('tableQrPrintModal').classList.add('hidden');
+        document.getElementById('tableQrPrintModal').classList.remove('flex');
+      });
+      document.getElementById('printQrPosterBtn').addEventListener('click', () => window.print());
+
+      document.getElementById('closeReceiptBtn').addEventListener('click', () => {
+        document.getElementById('receiptModal').classList.add('hidden');
+        document.getElementById('receiptModal').classList.remove('flex');
+      });
+      document.getElementById('closeReceiptFooterBtn').addEventListener('click', () => {
+        document.getElementById('receiptModal').classList.add('hidden');
+        document.getElementById('receiptModal').classList.remove('flex');
+      });
+      document.getElementById('printReceiptNowBtn').addEventListener('click', () => window.print());
+
+      // Real-time multi-tab sync: when Customer sends order in another tab, Kitchen Display auto-prints KOT!
+      window.addEventListener('storage', (ev) => {
+        if (ev.key !== STORAGE_KEY || !ev.newValue) return;
+        const prevLogId = state.kitchenPrintLogs[0] ? state.kitchenPrintLogs[0].id : null;
+        try {
+          const updated = JSON.parse(ev.newValue);
+          const currentView = state.currentView;
+          const authRole = state.authRole;
+          state = updated;
+          state.currentView = currentView;
+          state.authRole = authRole;
+          renderAll();
+          const latestLog = state.kitchenPrintLogs[0];
+          if (latestLog && latestLog.id !== prevLogId && state.currentView === 'kitchen') {
+            autoTriggerKitchenPrint(latestLog);
+          }
+        } catch (e) {}
+      });
+    });
+  </script>
+</body>
+</html>

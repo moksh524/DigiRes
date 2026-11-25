@@ -1,0 +1,12 @@
+{
+  "name": "digires-pos-platform",
+  "version": "1.0.0",
+  "description": "DigiRes Smart Restaurant Billing, QR Code Session Ordering, KDS & Admin Platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
