@@ -1,16 +1,46 @@
 const express = require('express');
 const https = require('https');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const DATA_FILE = path.join(__dirname, 'digires-data.json');
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 app.use(express.static(__dirname));
+
+let sharedState = null;
+try {
+  if (fs.existsSync(DATA_FILE)) {
+    sharedState = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  }
+} catch (e) {
+  sharedState = null;
+}
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', app: 'DigiRes POS & QR Platform' });
+});
+
+app.get('/api/config', (_req, res) => {
+  res.json({ razorpayKeyId: process.env.RAZORPAY_KEY_ID || '' });
+});
+
+// Multi-Device Live State Sync (Customer Phone <-> Kitchen <-> Owner <-> Admin)
+app.get('/api/state', (_req, res) => {
+  res.json({ state: sharedState });
+});
+
+app.post('/api/state', (req, res) => {
+  if (req.body && req.body.state) {
+    sharedState = req.body.state;
+    try {
+      fs.writeFileSync(DATA_FILE, JSON.stringify(sharedState), 'utf8');
+    } catch (e) {}
+  }
+  res.json({ ok: true });
 });
 
 // 1. Create Razorpay Order
