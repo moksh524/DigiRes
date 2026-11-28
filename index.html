@@ -7,6 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🍽️%3C/text%3E%3C/svg%3E">
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>window.QRCode||document.write('<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"><\/script>')</script>
 <style type="text/tailwindcss">
 @layer components{
  .btn{@apply inline-flex items-center justify-center gap-1 rounded-lg px-3 py-2 text-sm font-semibold transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed}
@@ -95,7 +96,7 @@ function render() {
   drawQRs(); window.scrollTo(0, y);
 }
 function drawQRs(root = document) {
-  if (typeof QRCode === 'undefined') return;
+  if (typeof QRCode === 'undefined') { root.querySelectorAll('[data-qr]').forEach(el => { el.innerHTML = '<div class="text-xs text-red-600 text-center">QR library load nahi hui. Internet / adblock check karke page refresh karo.</div>'; }); return; }
   root.querySelectorAll('[data-qr]').forEach(el => {
     el.innerHTML = ''; const s = +el.dataset.size || 120;
     new QRCode(el, { text: el.dataset.qr, width: s, height: s, correctLevel: QRCode.CorrectLevel.M });
@@ -224,7 +225,7 @@ function nav() {
   <button onclick="go('home')" class="text-xl font-extrabold">Digi<span class="text-[#f59e0b]">Res</span></button>
   <nav class="flex gap-2 ml-auto text-sm items-center flex-wrap">
   <button class="px-2 py-1 rounded hover:bg-white/10" onclick="go('home')">Home</button>
-  ${role === 'owner' ? `<button class="px-2 py-1 rounded hover:bg-white/10" onclick="go('panel')">Dashboard</button>${o && o.features.kds && o.status === 'live' ? `<a class="px-2 py-1 rounded hover:bg-white/10" target="_blank" href="/?view=kitchen&owner=${AUTH.id}">Kitchen Display</a>` : ''}` : ''}
+  ${role === 'owner' ? `<button class="px-2 py-1 rounded hover:bg-white/10" onclick="go('panel')">Dashboard</button>` : ''}
   ${role === 'admin' ? `<button class="px-2 py-1 rounded hover:bg-white/10" onclick="go('panel')">Admin Console</button>` : ''}
   ${AUTH ? `<button class="btn btn-a" onclick="logout()">Logout</button>` : `<button class="btn btn-a" onclick="openLogin('login')">Owner Login</button>`}
   </nav></div></header>`;
@@ -258,8 +259,14 @@ function openLogin(t = 'login', planId) {
   modal(head + b + supportLine('mt-4 text-center'));
 }
 const doLogin = () => run(async () => {
-  const j = await api('/api/auth/owner-login', { body: { email: $('lEmail').value, password: $('lPass').value } });
-  setAuth(j); closeModal(); view = 'panel'; tab = 'tables'; await refresh(); toast('Welcome back!');
+  const email = $('lEmail').value, password = $('lPass').value; let j;
+  try { j = await api('/api/auth/owner-login', { body: { email, password } }); }
+  catch (e) {
+    if (e.status !== 401) throw e;
+    try { j = await api('/api/auth/admin-login', { body: { email, password } }); }
+    catch (e2) { throw new Error('Email ya password galat hai. Naya owner ho to pehle "New Subscribe" se sign up karo.'); }
+  }
+  setAuth(j); closeModal(); view = 'panel'; tab = 'tables'; atab = 'plans'; await refresh(); toast('Welcome!');
 });
 const doForgot = () => run(async () => {
   await api('/api/auth/owner-forgot', { body: { email: $('fEmail').value, pin: $('fPin').value, newPassword: $('fPass').value } });
@@ -293,8 +300,12 @@ function payModal() {
   modal(`<h2 class="text-xl font-extrabold text-[#0f6b30]">Pay subscription</h2><div class="rounded-xl bg-[#e7f4ec] p-3 my-3 text-sm">${esc(pl.name)} plan – <b>${money(pl.price)}</b> / month</div>
   <button class="btn btn-g w-full mb-1" ${pay.razorpay ? '' : 'disabled'} onclick="subRazor()">Pay with Razorpay (cards, UPI, netbanking)</button>${pay.razorpay ? '' : '<p class="text-xs text-gray-500 mb-2">Razorpay is not set up by the admin yet.</p>'}
   <button class="btn btn-a w-full mt-2" ${upiOk ? '' : 'disabled'} onclick="subUpi()">Pay via UPI QR</button>${upiOk ? '' : '<p class="text-xs text-gray-500 mt-1">Admin UPI is not set up yet.</p>'}
-  <p class="text-xs text-gray-500 mt-3">Your account is created and unlocked only after payment is confirmed.</p>` + supportLine('mt-3'));
+  ${S.testMode ? '<button class="btn btn-o w-full mt-3" onclick="subTest()">🧪 Test payment (demo, no real money)</button>' : ''}<p class="text-xs text-gray-500 mt-3">Your account is created and unlocked only after payment is confirmed.</p>` + supportLine('mt-3'));
 }
+const subTest = () => run(async () => {
+  const v = await api('/api/test/pay-signup', { body: { pendingId: PEND.id } });
+  setAuth(v); closeModal(); view = 'panel'; tab = 'tables'; await refresh(); toast('Test account created');
+});
 const subRazor = () => payRazor({ type: 'subscription', pendingId: PEND.id }, {
   name: 'DigiRes', desc: planOf(PEND.planId).name + ' subscription',
   onSuccess: v => { setAuth(v); closeModal(); view = 'panel'; tab = 'tables'; refresh(); toast('Payment verified. Welcome to DigiRes!'); }
@@ -303,11 +314,12 @@ function subUpi() {
   const pl = planOf(PEND.planId), link = upiLink(S.pay.upi, 'DigiRes', pl.price, 'DigiRes ' + pl.name);
   modal(`<h2 class="text-xl font-extrabold text-[#0f6b30]">Pay ${money(pl.price)} by UPI</h2><div class="flex justify-center my-3" data-qr="${esc(link)}" data-size="200"></div>
   <a class="btn btn-o w-full mb-2" href="${esc(link)}">Open UPI app</a>
-  <input id="utr" class="inp mb-2" placeholder="UPI transaction / UTR number after paying"><button class="btn btn-g w-full" onclick="claimUpi()">I have paid – notify admin</button>
-  <p class="text-xs text-gray-500 mt-2">The admin confirms your payment, then your account is created.</p>`);
+  <input id="utr" class="inp mb-2 text-center tracking-widest" inputmode="numeric" maxlength="12" placeholder="12-digit UTR / Transaction ID"><button class="btn btn-g w-full" onclick="claimUpi()">Verify payment</button>
+  <p class="text-xs text-gray-500 mt-2">UTR match hote hi account turant ban jata hai. Match na ho to admin confirm karega.</p>`);
 }
 const claimUpi = () => run(async () => {
-  await api('/api/signup/claim-upi', { body: { pendingId: PEND.id, utr: $('utr').value } });
+  const j = await api('/api/signup/claim-upi', { body: { pendingId: PEND.id, utr: $('utr').value } });
+  if (j.matched && j.token) { setAuth(j); closeModal(); view = 'panel'; tab = 'tables'; await refresh(); toast('Payment verified. Welcome to DigiRes!'); return; }
   modal(`<h2 class="text-xl font-extrabold text-[#0f6b30]">Waiting for confirmation</h2><p class="text-sm mt-2">We sent your payment details to the admin. Keep this window open or log in later with <b>${esc(PEND.email)}</b> once approved.</p><div class="mt-4 h-1 bg-gray-200 rounded overflow-hidden"><div class="h-1 w-1/3 bg-[#f59e0b] animate-pulse"></div></div>` + supportLine('mt-4'));
   SUBPOLL = setInterval(async () => {
     try {
@@ -338,11 +350,17 @@ function tTables() {
     <span class="badge ${st[1]}">${st[0]}</span>${c ? `<div class="font-mono text-lg font-bold tracking-widest mt-1">${esc(c.code)}</div>` : ''}
     <input id="code_${n}" data-draft class="inp mt-2 text-center" placeholder="Secret session code" maxlength="12" value="${esc(D('code_' + n))}">
     <div class="flex gap-1 mt-2"><button class="btn btn-g flex-1" onclick="setCode(${n})">Set code</button><button class="btn btn-o" title="Random code" onclick="setCode(${n},true)">🎲</button></div>
-    <button class="btn btn-o w-full mt-1" onclick="printQR(${n})">🖨 Print QR sticker</button></div>`;
+    <button class="btn btn-o w-full mt-1" onclick="printQR(${n})">🖨 Print QR sticker</button><a class="btn btn-o w-full mt-1" target="_blank" href="${esc(tUrl(n))}">👁 Open as customer</a></div>`;
   }
-  return `<div class="card p-4 mb-4 flex flex-wrap items-end gap-3"><div><label class="text-xs text-gray-500">Total tables</label><input id="tblCount" data-draft type="number" min="1" max="100" class="inp w-28" value="${esc(D('tblCount', o.tables))}"></div><button class="btn btn-g" onclick="saveTables()">Save</button><button class="btn btn-o" onclick="printAllQR()">🖨 Print all QRs</button>
-  <p class="text-xs text-gray-500 flex-1 min-w-[220px]">Table QRs never expire. Give guests the secret session code; it expires automatically after full payment, so set a new one for the next seating.</p></div>
+  const lh = /^(localhost|127\.)/.test(location.hostname);
+  return `${lh ? '<div class="rounded-xl bg-amber-50 border border-amber-300 p-3 text-sm mb-4">⚠ Abhi aap <b>localhost</b> par ho, isliye ye QR phone par nahi khulenge. Live site (Render link) se dashboard kholkar QR print karo.</div>' : ''}<div class="grid lg:grid-cols-2 gap-4 mb-4"><div class="card p-4 flex flex-wrap items-end gap-3"><div><label class="text-xs text-gray-500">Total tables</label><input id="tblCount" data-draft type="number" min="1" max="100" class="inp w-28" value="${esc(D('tblCount', o.tables))}"></div><button class="btn btn-g" onclick="saveTables()">Save</button><button class="btn btn-o" onclick="printAllQR()">🖨 Print all QRs</button>
+  <p class="text-xs text-gray-500 flex-1 min-w-[220px]">Table QRs never expire. Give guests the secret session code; it expires automatically after full payment, so set a new one for the next seating.</p></div>${kitchenCard(o)}</div>
   <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">${cards}</div>`;
+}
+function kitchenCard(o) {
+  const kUrl = `${location.origin}/?view=kitchen&owner=${o.id}&key=${o.kitchenKey}`;
+  if (!o.features.kds) return '<div class="card p-4"><h2 class="font-bold">🍳 Kitchen Display</h2><p class="text-sm text-gray-600 mt-1">Kitchen Display is not enabled on your plan.</p></div>';
+  return `<div class="card p-4 flex gap-4 items-center"><div class="shrink-0" data-qr="${esc(kUrl)}" data-size="110"></div><div class="flex-1 min-w-0"><h2 class="font-bold">🍳 Kitchen Display</h2><p class="text-xs text-gray-500 mb-2">Kitchen tablet par ye QR scan karo ya link kholo. Isme password nahi lagta, private rakho.</p><div class="flex gap-2 flex-wrap"><a class="btn btn-g" target="_blank" href="${esc(kUrl)}">Open Kitchen</a><button class="btn btn-o" onclick="navigator.clipboard.writeText('${esc(kUrl)}').then(()=>toast('Link copied'))">Copy link</button></div></div></div>`;
 }
 const setCode = (n, rand) => run(async () => {
   const code = rand ? '' : D('code_' + n).trim();
@@ -367,7 +385,7 @@ function tBilling() {
   const pr = o.features.printer;
   return `<div class="flex items-center gap-2 mb-4 flex-wrap"><h2 class="font-bold">Collect payment</h2>${pr ? `<button class="btn btn-o ml-auto" onclick="btPair()">${BT.chr ? '🟢 Printer paired – re-pair' : '🖨 Pair Bluetooth 58mm printer'}</button>` : ''}</div>
   ${un.length ? `<div class="grid md:grid-cols-2 gap-4">${un.map(b => `<div class="card p-4"><div class="flex justify-between items-center mb-2"><div class="font-bold text-lg">Table ${b.table}</div><span class="badge bg-red-100 text-red-700">UNPAID</span></div>${itemsHtml(b)}${totalsHtml(b)}
-  ${b.payClaim ? `<div class="mt-2 text-xs rounded bg-amber-50 border border-amber-200 p-2">Customer chose <b>${b.payClaim}</b>${b.payClaim === 'UPI' ? ' and says they paid – check your UPI app, then tap "UPI received"' : ' – collect at the counter'}.</div>` : ''}
+  ${b.payClaim ? `<div class="mt-2 text-xs rounded bg-amber-50 border border-amber-200 p-2">Customer chose <b>${b.payClaim}</b>${b.payClaim === 'UPI' ? ' · UTR <b>' + esc(b.claimUtr) + '</b> – bank SMS aate hi apne aap verify hoga (ya UPI app check karke "UPI received" dabao)' : ' – collect at the counter'}.</div>` : ''}
   <div class="grid grid-cols-2 gap-2 mt-3"><button class="btn btn-g" onclick="markPaid('${b.id}','CASH')">💵 Cash received</button><button class="btn btn-g" onclick="markPaid('${b.id}','UPI')">📲 UPI received</button><button class="btn btn-o" ${o.razorpay ? '' : 'disabled title="Razorpay not set up"'} onclick="razorBill('${b.id}')">💳 Razorpay</button><button class="btn btn-a" onclick="payQR('${b.id}')">▦ Pay QR</button></div></div>`).join('')}</div>` : '<div class="card p-6 text-center text-gray-500">No unpaid bills.</div>'}
   <h2 class="font-bold mt-8 mb-3">Paid bills (kept 7 days)</h2>
   ${paid.length ? `<div class="grid md:grid-cols-2 gap-4">${paid.map(b => `<div class="card p-4"><div class="flex justify-between items-center mb-2"><div class="font-bold">Table ${b.table} · ${money(b.total)}</div><span class="badge bg-green-100 text-green-700">PAID · ${esc(b.method)}</span></div><div class="text-xs text-gray-500 mb-2">${new Date(b.paidAt).toLocaleString('en-IN')}</div>
@@ -399,7 +417,6 @@ const addDish = () => run(async () => {
 const delDish = id => { if (confirm('Delete this dish?')) run(async () => { await act({ action: 'delDish', id }); await refresh(); }); };
 function tSettings() {
   const o = S.owner, g = Number(D('gst', o.gst)), opts = [0, 5, 12, 18, 28]; if (!opts.includes(g)) opts.push(g);
-  const kUrl = `${location.origin}/?view=kitchen&owner=${o.id}&key=${o.kitchenKey}`;
   return `<div class="grid md:grid-cols-2 gap-4"><div class="card p-4 space-y-2"><h2 class="font-bold">Restaurant & payments</h2>
   <label class="text-xs text-gray-500">Restaurant name</label><input id="stName" data-draft class="inp" value="${esc(D('stName', o.restaurant))}">
   <label class="text-xs text-gray-500">GST % on bills</label><select id="gst" data-draft class="inp">${opts.sort((a, b) => a - b).map(v => `<option value="${v}" ${v === g ? 'selected' : ''}>${v}%</option>`).join('')}</select>
@@ -407,7 +424,7 @@ function tSettings() {
   <label class="text-xs text-gray-500">Razorpay Key ID</label><input id="stKey" data-draft class="inp" placeholder="rzp_live_xxxxx" value="${esc(D('stKey', o.razorKeyId))}">
   <label class="text-xs text-gray-500">Razorpay Key Secret (stored on server only)</label><input id="stSec" data-draft type="password" class="inp" placeholder="${o.hasSecret ? '•••••• saved – leave blank to keep' : 'Key secret'}" value="${esc(D('stSec'))}">
   <button class="btn btn-g w-full" onclick="saveSettings()">Save settings</button></div>
-  <div class="space-y-4"><div class="card p-4"><h2 class="font-bold mb-1">Kitchen Display link</h2><p class="text-xs text-gray-500 mb-2">Open this on the kitchen tablet. It needs no password, so keep it private.</p>${o.features.kds ? `<input class="inp" readonly value="${esc(kUrl)}" onclick="this.select()"><div class="flex gap-2 mt-2"><button class="btn btn-o" onclick="navigator.clipboard.writeText('${esc(kUrl)}').then(()=>toast('Link copied'))">Copy link</button><a class="btn btn-g" target="_blank" href="${esc(kUrl)}">Open</a></div>` : '<p class="text-sm text-gray-600">Kitchen Display is not enabled on your plan.</p>'}</div>
+  <div class="space-y-4">${utrCard(o.id, o.feedKey, S.credits || [])}
   <div class="card p-4"><h2 class="font-bold mb-1">Receipt printer</h2>${o.features.printer ? `<p class="text-xs text-gray-500 mb-2">Pair a 58mm Bluetooth thermal printer (Chrome/Edge). Receipts print right after payment.</p><button class="btn btn-g" onclick="btPair()">${BT.chr ? '🟢 Paired – re-pair' : 'Pair Bluetooth printer'}</button>` : '<p class="text-sm text-gray-600">Auto Thermal Printer is not enabled on your plan.</p>'}</div>
   ${supportLine()}</div></div>`;
 }
@@ -434,7 +451,7 @@ async function afterState() {
 function gate(title, msg) { return `<div class="max-w-md mx-auto mt-16 card p-8 text-center"><div class="text-4xl">🍳</div><h1 class="text-xl font-extrabold text-[#0f6b30] mt-2">${title}</h1><p class="text-gray-600 mt-2 text-sm">${msg}</p>${supportLine('mt-4')}</div>`; }
 function vKitchen() {
   const o = S.owner;
-  if (!o) return gate('Kitchen Display', 'Open the Kitchen Display link from Owner Dashboard → Settings, or log in as the owner first.');
+  if (!o) return gate('Kitchen Display', 'Kitchen link ya QR Owner Dashboard → Tables & QR tab se kholo.');
   if (o.status !== 'live') return gate('Subscription stopped', 'This restaurant\'s DigiRes subscription is stopped.');
   if (!o.features.kds) return gate('Kitchen Display not enabled', 'Kitchen Display is not part of this restaurant\'s plan.');
   const list = (S.bills || []).filter(b => b.status === 'UNPAID').sort((a, b) => a.createdAt - b.createdAt);
@@ -469,9 +486,10 @@ function vCustomer() {
   const menu = o.menu.length ? o.menu.map(d => `<div class="card p-3"><div class="font-semibold">${esc(d.name)}</div>${btn(d, 'Half')}${btn(d, 'Full')}</div>`).join('') : '<div class="card p-6 text-center text-gray-500">The menu is not ready yet.</div>';
   const billHtml = b ? `<div class="card p-4 mt-6"><div class="flex justify-between items-center mb-2"><h2 class="font-extrabold">Your bill</h2><div class="flex gap-1">${kitBadge(b.kitchen)}<span class="badge bg-red-100 text-red-700">UNPAID</span></div></div>${itemsHtml(b)}${totalsHtml(b)}
   ${b.payClaim ? `<div class="mt-3 text-sm rounded bg-amber-50 border border-amber-200 p-2">${b.payClaim === 'UPI' ? 'Waiting for the restaurant to confirm your UPI payment.' : 'Please pay cash at the counter.'}</div>` : ''}
-  <div class="grid grid-cols-3 gap-2 mt-3"><button class="btn btn-g" onclick="payUpi()">UPI</button><button class="btn btn-a" ${o.razorpay ? '' : 'disabled'} onclick="payRzp()">Razorpay</button><button class="btn btn-o" onclick="payCash()">Cash</button></div></div>` : '';
+  <button class="btn btn-g w-full mt-3 !py-3" onclick="custPay()">Pay ${money(b.total)} now</button></div>` : '';
+  const payBar = (!cnt && b && b.status === 'UNPAID') ? `<div class="fixed bottom-0 inset-x-0 bg-white border-t p-3 z-20"><div class="max-w-xl mx-auto flex items-center gap-3"><div class="flex-1 text-sm">Bill total <b>${money(b.total)}</b></div><button class="btn btn-g !px-5 !py-3" onclick="custPay()">Pay now</button></div></div>` : '';
   return wrap(`<h2 class="font-extrabold text-lg mb-3">Menu</h2><div class="space-y-3">${menu}</div>${billHtml}`) +
-    (cnt ? `<div class="fixed bottom-0 inset-x-0 bg-white border-t p-3 z-20"><div class="max-w-xl mx-auto flex items-center gap-3"><div class="flex-1 text-sm"><b>${cnt}</b> item${cnt > 1 ? 's' : ''} · ${money(est)} <span class="text-gray-400">(before GST)</span></div><button class="btn btn-a !px-5 !py-3" onclick="sendOrder()">Send order to kitchen</button></div></div>` : '');
+    (cnt ? `<div class="fixed bottom-0 inset-x-0 bg-white border-t p-3 z-20"><div class="max-w-xl mx-auto flex items-center gap-3"><div class="flex-1 text-sm"><b>${cnt}</b> item${cnt > 1 ? 's' : ''} · ${money(est)} <span class="text-gray-400">(before GST)</span></div><button class="btn btn-a !px-5 !py-3" onclick="sendOrder()">Send order to kitchen</button></div></div>` : payBar);
 }
 const cartAdd = (k, d) => { cart[k] = Math.max(0, (cart[k] || 0) + d); render(); };
 const enterCode = () => run(async () => {
@@ -486,13 +504,32 @@ const sendOrder = () => run(async () => {
     localStorage.setItem(CK('bill'), j.billId); cart = {}; toast('Order sent to the kitchen ✓'); await refresh();
   } catch (e) { if (e.status === 403) { sessionStorage.removeItem(CK('code')); await refresh(); } throw e; }
 });
+function custPay() {
+  const o = S.owner, b = S.bill; if (!b || b.status === 'PAID') return;
+  const upiOk = validUpi(o.upi);
+  modal(`<h2 class="text-xl font-extrabold text-[#0f6b30]">Pay your bill</h2>
+  <div class="rounded-xl bg-[#e7f4ec] p-3 my-3 text-sm flex justify-between gap-2"><span>Table ${esc(TABLE)} · ${esc(o.restaurant)}</span><b>${money(b.total)}</b></div>
+  <button class="btn btn-g w-full" ${o.razorpay ? '' : 'disabled'} onclick="closeModal();payRzp()">Pay with Razorpay (UPI, cards, netbanking)</button>${o.razorpay ? '' : '<p class="text-xs text-gray-500 mt-1">Restaurant ne Razorpay set nahi kiya.</p>'}
+  <button class="btn btn-a w-full mt-2" ${upiOk ? '' : 'disabled'} onclick="payUpi()">Pay via UPI QR</button>${upiOk ? '' : '<p class="text-xs text-gray-500 mt-1">Restaurant ne UPI ID set nahi ki.</p>'}
+  <button class="btn btn-o w-full mt-2" onclick="payCash()">Pay cash at the counter</button>
+  ${S.testMode ? '<button class="btn btn-o w-full mt-2" onclick="closeModal();payTest()">🧪 Test payment (demo)</button>' : ''}
+  <p class="text-xs text-gray-500 mt-3">Razorpay payment verify hote hi bill apne aap PAID ho jata hai. UPI ya Cash ko restaurant confirm karta hai.</p>` + supportLine('mt-3'));
+}
 const payUpi = () => {
   const o = S.owner, b = S.bill;
   if (!validUpi(o.upi)) return toast('The restaurant has not set up UPI. Please pay Cash or Razorpay.', 'err');
   const link = upiLink(o.upi, o.restaurant, b.total, 'Table ' + TABLE);
-  modal(`<h2 class="text-xl font-extrabold text-[#0f6b30]">Pay ${money(b.total)}</h2><div class="flex justify-center my-3" data-qr="${esc(link)}" data-size="210"></div><a class="btn btn-o w-full mb-2" href="${esc(link)}">Open UPI app</a><button class="btn btn-g w-full" onclick="claimPay('UPI')">I have paid</button><p class="text-xs text-gray-500 mt-2">The restaurant confirms your payment before the bill is marked PAID.</p>`);
+  modal(`<h2 class="text-xl font-extrabold text-[#0f6b30]">Pay ${money(b.total)}</h2><div class="flex justify-center my-3" data-qr="${esc(link)}" data-size="210"></div><a class="btn btn-o w-full mb-2" href="${esc(link)}">Open UPI app</a><input id="custUtr" class="inp mb-2 text-center tracking-widest" inputmode="numeric" maxlength="12" placeholder="12-digit UTR / Transaction ID"><button class="btn btn-g w-full" onclick="claimPay('UPI')">Verify payment</button><p class="text-xs text-gray-500 mt-2">Payment ke baad apne UPI app se 12-digit UTR (UPI transaction ID) copy karke yahan daalo. Restaurant ko payment milte hi bill apne aap PAID ho jata hai.</p>`);
 };
-const claimPay = m => run(async () => { await act({ action: 'claimPay', owner: OWNER_ID, billId: S.bill.id, method: m }); closeModal(); toast(m === 'UPI' ? 'Sent. Waiting for restaurant confirmation.' : 'Please pay at the counter.'); await refresh(); });
+const claimPay = m => run(async () => {
+  const body = { action: 'claimPay', owner: OWNER_ID, billId: S.bill.id, method: m };
+  if (m === 'UPI') body.utr = ($('custUtr') || {}).value;
+  const j = await act(body); closeModal();
+  if (m === 'UPI') toast(j.matched ? 'Payment verified ✓' : 'UTR mil gaya. Restaurant ko payment milte hi bill PAID ho jayega.', j.matched ? 'ok' : 'warn');
+  else toast('Please pay at the counter.');
+  await refresh();
+});
+const payTest = () => run(async () => { await api('/api/test/pay-bill', { body: { owner: OWNER_ID, billId: S.bill.id } }); toast('Test payment done ✓'); await refresh(); });
 const payCash = () => claimPay('CASH');
 const payRzp = () => payRazor({ type: 'bill', owner: OWNER_ID, billId: S.bill.id }, { name: S.owner.restaurant, desc: 'Table ' + TABLE, onSuccess: () => { toast('Payment verified ✓'); refresh(); } });
 const custWA = () => waOpen(S.owner, S.bill, CC(), D('waPhone'));
@@ -500,8 +537,9 @@ function newSeating() { localStorage.removeItem(CK('bill')); sessionStorage.remo
 
 /* ================= admin console ================= */
 function vAdmin() {
+  const warn = S.storage === 'ephemeral' ? '<div class="rounded-xl bg-red-50 border border-red-300 text-red-800 p-3 text-sm mb-4">⚠ <b>Storage temporary hai.</b> Render restart ya redeploy par saare owners aur bills delete ho jayenge (isi wajah se owner ko dobara sign up karna padta hai). Upstash Redis (free) ya Render Disk lagao.</div>' : '';
   const tabs = [['plans', 'Subscription Plans'], ['owners', 'Owners'], ['pay', 'Payments & Security']];
-  return `<div class="flex items-center justify-between flex-wrap gap-2 mb-4"><h1 class="text-2xl font-extrabold text-[#0f6b30]">Super Admin Console</h1>${supportLine()}</div>
+  return `${warn}${S.testMode ? '<div class="rounded-xl bg-amber-50 border border-amber-300 p-3 text-sm mb-4">🧪 <b>TEST_MODE ON</b>: demo payments chalu hain. Live karte time Render se TEST_MODE hata do.</div>' : ''}<div class="flex items-center justify-between flex-wrap gap-2 mb-4"><h1 class="text-2xl font-extrabold text-[#0f6b30]">Super Admin Console</h1>${supportLine()}</div>
   <div class="flex gap-1 overflow-x-auto mb-5">${tabs.map(([k, l]) => `<button class="px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap ${atab === k ? 'bg-[#0f6b30] text-white' : 'bg-white border'}" onclick="atab='${k}';render()">${l}${k === 'pay' && S.pending.length ? ` <span class="badge bg-[#f59e0b] text-black">${S.pending.length}</span>` : ''}</button>`).join('')}</div>
   ${{ plans: aPlans, owners: aOwners, pay: aPay }[atab]()}`;
 }
@@ -517,17 +555,46 @@ const addPlan = () => run(async () => {
 });
 const togglePlan = id => run(async () => { await act({ action: 'togglePlan', id }); await refresh(); });
 const delPlan = id => { if (confirm('Delete this plan?')) run(async () => { await act({ action: 'delPlan', id }); await refresh(); }); };
-function aOwners() {
+function aOwnersList() {
   if (!S.owners.length) return '<div class="card p-8 text-center text-gray-500">No owners yet. They appear here after paying a subscription.</div>';
   return `<div class="space-y-3">${S.owners.map(o => `<div class="card p-4"><div class="flex flex-wrap items-center gap-2 justify-between"><div><div class="font-bold">${esc(o.restaurant)} <span class="badge ${o.status === 'live' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${o.status === 'live' ? 'Live' : 'Stopped'}</span></div><div class="text-xs text-gray-500">${esc(o.email)} · ID ${o.id} · joined ${new Date(o.createdAt).toLocaleDateString('en-IN')}</div></div>
   <div class="flex gap-2 items-center"><select class="inp !w-auto" onchange="ownerPlan('${o.id}',this.value)">${S.plans.map(p => `<option value="${p.id}" ${p.id === o.planId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}${S.plans.some(p => p.id === o.planId) ? '' : `<option selected>(plan removed)</option>`}</select>
-  ${o.status === 'live' ? `<button class="btn btn-r" onclick="ownerStatus('${o.id}','stopped')">Stop</button>` : `<button class="btn btn-g" onclick="ownerStatus('${o.id}','live')">Activate</button>`}<button class="btn btn-o" onclick="delOwner('${o.id}')">Delete</button></div></div>
+  ${o.status === 'live' ? `<button class="btn btn-r" onclick="ownerStatus('${o.id}','stopped')">Stop</button>` : `<button class="btn btn-g" onclick="ownerStatus('${o.id}','live')">Activate</button>`}<button class="btn btn-o" onclick="ownerPass('${o.id}')">Reset password</button><button class="btn btn-o" onclick="delOwner('${o.id}')">Delete</button></div></div>
   <div class="flex flex-wrap gap-4 mt-3 text-sm">${Object.keys(featName).map(k => `<label class="flex items-center gap-1"><input type="checkbox" ${o.features[k] ? 'checked' : ''} onchange="ownerFeat('${o.id}','${k}',this.checked)"> ${featName[k]}</label>`).join('')}</div></div>`).join('')}</div>`;
 }
+function aOwners() {
+  return `<div class="card p-4 mb-4"><h2 class="font-bold mb-2">Add owner manually</h2><div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">
+  <input id="oName" data-draft class="inp" placeholder="Restaurant name" value="${esc(D('oName'))}">
+  <input id="oEmail" data-draft type="email" class="inp" placeholder="Owner email" value="${esc(D('oEmail'))}">
+  <input id="oPass" data-draft class="inp" placeholder="Password (6+ chars)" value="${esc(D('oPass'))}">
+  <input id="oPin" data-draft class="inp" inputmode="numeric" maxlength="6" placeholder="Recovery PIN (4-6 digits)" value="${esc(D('oPin'))}">
+  <select id="oPlan" data-draft class="inp">${S.plans.map(p => `<option value="${p.id}" ${D('oPlan') === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+  <button class="btn btn-g mt-3" onclick="addOwner()">Create owner</button></div>` + aOwnersList();
+}
+const addOwner = () => run(async () => {
+  await act({ action: 'addOwner', restaurant: D('oName'), email: D('oEmail'), password: D('oPass'), pin: D('oPin'), planId: D('oPlan', (S.plans[0] || {}).id) });
+  ['oName', 'oEmail', 'oPass', 'oPin', 'oPlan'].forEach(k => delete DRAFT[k]); toast('Owner created. They can log in now.'); await refresh();
+});
+const ownerPass = id => { const p = prompt('Owner ka naya password (6+ characters):'); if (!p) return; run(async () => { await act({ action: 'ownerPassword', id, password: p }); toast('Owner password updated'); }); };
 const ownerStatus = (id, status) => run(async () => { await act({ action: 'ownerStatus', id, status }); toast(status === 'live' ? 'Owner activated' : 'Owner stopped – dashboard locked'); await refresh(); });
 const ownerPlan = (id, planId) => run(async () => { await act({ action: 'ownerPlan', id, planId }); toast('Plan switched'); await refresh(); });
 const ownerFeat = (id, key, value) => run(async () => { await act({ action: 'ownerFeature', id, key, value }); await refresh(); });
 const delOwner = id => { if (confirm('Delete this owner and all their data?')) run(async () => { await act({ action: 'delOwner', id }); await refresh(); }); };
+function utrCard(scope, key, credits) {
+  const url = location.origin + '/api/utr-feed', sample = JSON.stringify({ owner: scope, key: key, text: '<bank SMS text>' });
+  return `<div class="card p-4"><h2 class="font-bold mb-1">Auto UTR verification</h2>
+  <p class="text-xs text-gray-500">Bank ka "credited" SMS yahan pahunchte hi, customer ka UTR match hone par bill apne aap PAID ho jata hai (rakam bhi bill ke barabar ya zyada honi chahiye).</p>
+  <textarea id="creditText" data-draft rows="3" class="inp mt-2" placeholder="Bank SMS paste karo, ya likho: 412345678901 420">${esc(D('creditText'))}</textarea>
+  <button class="btn btn-g mt-2" onclick="addCredits()">Add received payment</button>
+  <details class="mt-3 text-xs"><summary class="cursor-pointer font-semibold">Full auto: SMS forwarder setup</summary><div class="mt-2 space-y-1"><div>Phone ka "SMS forwarder" app bank ke credit SMS ko is URL par POST kare:</div><div><code class="break-all">${esc(url)}</code></div><div>JSON body:</div><div><code class="break-all">${esc(sample)}</code></div><div class="text-red-700">Ye key private rakho.</div></div></details>
+  <div class="mt-3 text-xs">${credits.length ? credits.map(c => `<div class="flex justify-between gap-2 border-t py-1"><span>UTR ${esc(c.utr)} · ${money(c.amount)}</span><span class="${c.used ? 'text-green-700' : 'text-gray-500'}">${c.used ? 'Matched ✓' : 'Waiting'}</span></div>`).join('') : '<span class="text-gray-400">Abhi koi received payment nahi.</span>'}</div></div>`;
+}
+const addCredits = () => run(async () => {
+  const j = await act({ action: 'addCredits', text: D('creditText') });
+  delete DRAFT.creditText;
+  toast(j.added ? `${j.added} payment add hui${j.matched ? ', ' + j.matched + ' bill match ✓' : ''}` : 'Koi naya payment nahi mila (SMS mein 12-digit UTR aur rakam honi chahiye)', j.added ? 'ok' : 'warn');
+  await refresh();
+});
 function aPay() {
   const a = S.admin;
   return `<div class="grid lg:grid-cols-2 gap-4"><div class="card p-4 space-y-2"><h2 class="font-bold">Admin payment settings</h2><p class="text-xs text-gray-500">Owners pay their subscriptions here.</p>
@@ -536,7 +603,7 @@ function aPay() {
   <label class="text-xs text-gray-500">Razorpay Key Secret (server only; or set RAZORPAY_KEY_SECRET env)</label><input id="adSec" data-draft type="password" class="inp" placeholder="${a.hasSecret ? '•••••• saved – leave blank to keep' : 'Key secret'}" value="${esc(D('adSec'))}">
   <button class="btn btn-g w-full" onclick="saveAdmin()">Save payment settings</button></div>
   <div class="card p-4 space-y-2"><h2 class="font-bold">Change password / Recovery PIN</h2><input id="cpCur" data-draft type="password" class="inp" placeholder="Current password" value="${esc(D('cpCur'))}"><input id="cpNew" data-draft type="password" class="inp" placeholder="New password (8+ chars, optional)" value="${esc(D('cpNew'))}"><input id="cpPin" data-draft class="inp" inputmode="numeric" placeholder="New Recovery PIN (4-8 digits, optional)" value="${esc(D('cpPin'))}"><button class="btn btn-g w-full" onclick="changeAdmin()">Update</button></div></div>
-  <h2 class="font-bold mt-6 mb-2">UPI payments awaiting confirmation</h2>${S.pending.length ? `<div class="space-y-2">${S.pending.map(p => `<div class="card p-3 flex flex-wrap items-center gap-2 justify-between"><div class="text-sm"><b>${esc(p.restaurant)}</b> · ${esc(p.email)}<br><span class="text-gray-500">${esc(S.plans.find(x => x.id === p.planId)?.name || 'Plan')} · ${money(S.plans.find(x => x.id === p.planId)?.price)} · UTR <b>${esc(p.utr)}</b></span></div><div class="flex gap-2"><button class="btn btn-g" onclick="confirmSignup('${p.id}')">Payment received – create account</button><button class="btn btn-o" onclick="rejectSignup('${p.id}')">Reject</button></div></div>`).join('')}</div>` : '<div class="card p-4 text-sm text-gray-500">Nothing waiting.</div>'}
+  <div class="mt-4">${utrCard('admin', a.feedKey, S.credits || [])}</div><h2 class="font-bold mt-6 mb-2">UPI payments awaiting confirmation</h2>${S.pending.length ? `<div class="space-y-2">${S.pending.map(p => `<div class="card p-3 flex flex-wrap items-center gap-2 justify-between"><div class="text-sm"><b>${esc(p.restaurant)}</b> · ${esc(p.email)}<br><span class="text-gray-500">${esc(S.plans.find(x => x.id === p.planId)?.name || 'Plan')} · ${money(S.plans.find(x => x.id === p.planId)?.price)} · UTR <b>${esc(p.utr)}</b></span></div><div class="flex gap-2"><button class="btn btn-g" onclick="confirmSignup('${p.id}')">Payment received – create account</button><button class="btn btn-o" onclick="rejectSignup('${p.id}')">Reject</button></div></div>`).join('')}</div>` : '<div class="card p-4 text-sm text-gray-500">Nothing waiting.</div>'}
   <h2 class="font-bold mt-6 mb-2">Live payments feed (kept 7 days)</h2>${S.payments.length ? `<div class="card divide-y">${S.payments.map(p => `<div class="p-3 text-sm flex flex-wrap justify-between gap-2"><span><b>${esc(p.restaurant)}</b> · ${esc(p.planName || '')}</span><span>${money(p.amount)} · ${esc(p.method)} · ${new Date(p.ts).toLocaleString('en-IN')}</span></div>`).join('')}</div>` : '<div class="card p-4 text-sm text-gray-500">No payments yet.</div>'}`;
 }
 const saveAdmin = () => run(async () => {

@@ -4,11 +4,29 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+// Load secrets from a local .env file if present (never commit it). Real environment variables always win.
+let ENV_FILE = '';
+for (const f of [path.join(__dirname, '.env'), path.join(process.cwd(), '.env'), path.join(__dirname, '.env.txt')]) {
+  try {
+    const raw = fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '');
+    ENV_FILE = path.basename(f);
+    raw.split(/\r?\n/).forEach(l => {
+      const m = l.match(/^\s*(?:export\s+)?([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/);
+      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    });
+    break;
+  } catch (e) { /* try the next location */ }
+}
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const FILE = path.join(DATA_DIR, 'state.json');
 const SUPPORT = 'hareshfegade@gmail.com';
+const BUILD = 'DigiRes build 2026-11-28-r6';
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@digires.in').trim().toLowerCase();
+// Demo payments exist ONLY for local testing. They can never switch on when running on Render or with NODE_ENV=production.
+const TEST_MODE = process.env.TEST_MODE === '1' && !process.env.RENDER && process.env.NODE_ENV !== 'production';
+if (process.env.TEST_MODE === '1' && !TEST_MODE) console.warn('TEST_MODE is ignored on a live/production server (demo payments stay OFF).');
 const DAY = 864e5;
 const KEEP = 7 * DAY; // paid history, payment logs & print logs are deleted after 7 days
 const ENV_RZP_ID = process.env.RAZORPAY_KEY_ID || '';
@@ -24,26 +42,76 @@ const check = (pw, h) => {
   const [s, x] = h.split(':'); const y = crypto.scryptSync(String(pw || ''), s, 32); const xb = Buffer.from(x, 'hex');
   return xb.length === y.length && crypto.timingSafeEqual(xb, y);
 };
+const SECRET = () => process.env.SESSION_SECRET || db.secret;
+const KEYMAT = () => crypto.createHash('sha256').update(String(process.env.APP_SECRET || (db && db.secret) || '')).digest();
+const enc = t => {
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', KEYMAT(), iv);
+  const d = Buffer.concat([c.update(String(t), 'utf8'), c.final()]);
+  return 'enc:' + Buffer.concat([iv, c.getAuthTag(), d]).toString('base64');
+};
+const dec = t => {
+  if (!String(t).startsWith('enc:')) return t;
+  try {
+    const b = Buffer.from(t.slice(4), 'base64'), d = crypto.createDecipheriv('aes-256-gcm', KEYMAT(), b.subarray(0, 12));
+    d.setAuthTag(b.subarray(12, 28));
+    return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+  } catch (e) { return ''; }
+};
 const validUpi = u => /^[A-Za-z0-9._\-]{2,64}@[A-Za-z0-9]{2,32}$/.test(String(u || '').trim());
 const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 const FEATS = ['qr', 'kds', 'whatsapp', 'printer'];
 
+/* ---------- durable remote storage (optional, recommended on Render free) ---------- */
+const R_URL = (process.env.UPSTASH_REDIS_REST_URL || '').replace(/\/$/, ''), R_TOK = process.env.UPSTASH_REDIS_REST_TOKEN || '';
+const REMOTE = !!(R_URL && R_TOK);
+async function rcmd(cmd) {
+  const r = await fetch(R_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + R_TOK, 'Content-Type': 'application/json' }, body: JSON.stringify(cmd) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || 'Redis HTTP ' + r.status);
+  return j.result;
+}
+let rTimer = null, rBusy = false, rAgain = false;
+function pushRemote() { if (REMOTE) { clearTimeout(rTimer); rTimer = setTimeout(flushRemote, 300); } }
+async function flushRemote() {
+  if (rBusy) { rAgain = true; return; }
+  rBusy = true;
+  try { await rcmd(['SET', 'digires_state', JSON.stringify(db)]); } catch (e) { console.error('Redis save failed:', e.message); }
+  rBusy = false; if (rAgain) { rAgain = false; pushRemote(); }
+}
+
 /* ---------- persistent store ---------- */
 let db;
 function save() {
-  const t = FILE + '.tmp';
-  fs.writeFileSync(t, JSON.stringify(db));
-  fs.renameSync(t, FILE);
+  try { const t = FILE + '.tmp'; fs.writeFileSync(t, JSON.stringify(db)); fs.renameSync(t, FILE); } catch (e) { console.error('Disk save failed:', e.message); }
+  pushRemote();
 }
-function load() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  try { db = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { db = null; }
+async function load() {
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (e) { console.error('Cannot create data folder:', e.message); }
+  db = null;
+  if (REMOTE) {
+    try { const v = await rcmd(['GET', 'digires_state']); if (v) db = JSON.parse(v); }
+    catch (e) { console.error('Cannot read Redis state - refusing to start with empty data:', e.message); process.exit(1); }
+  }
+  if (!db) { try { db = JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { db = null; } }
+  if (db && !(db.secret && db.admin && db.admin.hash && Array.isArray(db.plans))) {
+    // state file from an older/different version: keep a backup and start fresh
+    try { fs.copyFileSync(FILE, FILE + '.old-' + Date.now()); } catch (e) {}
+    db = null;
+  }
   if (!db) {
-    const pw = process.env.ADMIN_PASSWORD || 'DigiRes@Admin2026';
-    const pin = process.env.ADMIN_PIN || '246810';
+    const pw = process.env.ADMIN_PASSWORD || '', pin = process.env.ADMIN_PIN || '';
+    if (pw.length < 8 || !/^\d{4,8}$/.test(pin)) {
+      console.error('\nSTOP: set ADMIN_PASSWORD (8+ characters) and ADMIN_PIN (4-8 digits) yourself.');
+      console.error('Put them in the .env file next to server.js, or in your hosting Environment variables, then start again.');
+      console.error('.env file found: ' + (ENV_FILE ? 'yes (' + ENV_FILE + ') but ADMIN_PASSWORD / ADMIN_PIN are missing or too short in it' : 'NO'));
+      console.error('Server folder: ' + __dirname);
+      try { console.error('Files here with "env" in the name: ' + (fs.readdirSync(__dirname).filter(f => /env/i.test(f)).join(', ') || '(none)')); } catch (e) {}
+      console.error('The file must be named exactly .env and sit next to server.js.\n');
+      process.exit(1);
+    }
     db = {
       secret: uid(32),
-      admin: { email: 'admin@digires.in', hash: hash(pw), pinHash: hash(pin), upi: '', razorKeyId: '', razorKeySecret: '' },
+      admin: { email: ADMIN_EMAIL, hash: hash(pw), pinHash: hash(pin), upi: '', razorKeyId: '', razorKeySecret: '' },
       plans: [
         { id: 'starter', name: 'Starter', price: 499, desc: 'QR ordering & billing for small cafés', features: { qr: true, kds: false, whatsapp: true, printer: false }, status: 'live' },
         { id: 'pro', name: 'Pro', price: 999, desc: 'Adds the live Kitchen Display', features: { qr: true, kds: true, whatsapp: true, printer: false }, status: 'live' },
@@ -51,14 +119,20 @@ function load() {
       ],
       owners: [], bills: [], payments: [], printLogs: [], pending: [], rzOrders: {}
     };
-    console.log('\n==== DigiRes first run ====');
-    console.log('Admin email   : admin@digires.in');
-    console.log('Admin password: ' + pw + (process.env.ADMIN_PASSWORD ? ' (from ADMIN_PASSWORD)' : ' (default – change it in Admin > Payments & Security)'));
-    console.log('Recovery PIN  : ' + pin + (process.env.ADMIN_PIN ? ' (from ADMIN_PIN)' : ' (default)'));
-    console.log('===========================\n');
+    console.log('Admin account created: ' + ADMIN_EMAIL);
   }
+  // If ADMIN_PASSWORD / ADMIN_PIN env vars are set, they always win (so changing them on Render resets the admin login)
+  if (process.env.ADMIN_EMAIL) db.admin.email = ADMIN_EMAIL;
+  // Env values are applied only when they CHANGE, so a password changed from the Admin panel / Forgot-PIN survives restarts.
+  const FORCE_RESET = process.env.ADMIN_RESET === '1'; // emergency: re-apply ADMIN_* env values once, then remove ADMIN_RESET
+  if (FORCE_RESET) console.warn('ADMIN_RESET=1: admin email/password/PIN are being reset from env. Remove ADMIN_RESET afterwards.');
+  if (process.env.ADMIN_PASSWORD && (FORCE_RESET || !check(process.env.ADMIN_PASSWORD, db.admin.envPwHash))) { db.admin.hash = hash(process.env.ADMIN_PASSWORD); db.admin.envPwHash = db.admin.hash; }
+  if (process.env.ADMIN_PIN && (FORCE_RESET || !check(process.env.ADMIN_PIN, db.admin.envPinHash))) { db.admin.pinHash = hash(process.env.ADMIN_PIN); db.admin.envPinHash = db.admin.pinHash; }
   ['owners', 'bills', 'payments', 'printLogs', 'pending'].forEach(k => { db[k] = db[k] || []; });
   db.rzOrders = db.rzOrders || {};
+  db.credits = db.credits || [];
+  if (!db.admin.feedKey) db.admin.feedKey = uid(8);
+  db.owners.forEach(o => { if (!o.feedKey) o.feedKey = uid(8); });
   save();
 }
 function cleanup() {
@@ -67,6 +141,7 @@ function cleanup() {
   db.payments = db.payments.filter(p => p.ts >= lim);
   db.printLogs = db.printLogs.filter(p => p.ts >= lim);
   db.pending = db.pending.filter(p => p.ts >= lim);
+  db.credits = db.credits.filter(c => c.ts >= lim);
   Object.keys(db.rzOrders).forEach(k => { if (db.rzOrders[k].ts < Date.now() - DAY) delete db.rzOrders[k]; });
   save();
 }
@@ -74,12 +149,12 @@ function cleanup() {
 /* ---------- auth ---------- */
 const sign = o => {
   const b = Buffer.from(JSON.stringify(o)).toString('base64url');
-  return b + '.' + crypto.createHmac('sha256', db.secret).update(b).digest('base64url');
+  return b + '.' + crypto.createHmac('sha256', SECRET()).update(b).digest('base64url');
 };
 function verifyTok(t) {
   try {
     const [b, s] = String(t).split('.');
-    const e = crypto.createHmac('sha256', db.secret).update(b).digest('base64url');
+    const e = crypto.createHmac('sha256', SECRET()).update(b).digest('base64url');
     if (s.length !== e.length || !crypto.timingSafeEqual(Buffer.from(s), Buffer.from(e))) return null;
     const o = JSON.parse(Buffer.from(b, 'base64url').toString());
     return o.exp > Date.now() ? o : null;
@@ -101,12 +176,12 @@ const limited = k => { const n = Date.now(), a = (tries.get(k) || []).filter(t =
 const failed = k => { const a = tries.get(k) || []; a.push(Date.now()); tries.set(k, a); };
 
 /* ---------- views ---------- */
-const rzCreds = x => (x && x.razorKeyId && x.razorKeySecret) ? { id: x.razorKeyId, secret: x.razorKeySecret }
+const rzCreds = x => (x && x.razorKeyId && x.razorKeySecret) ? { id: x.razorKeyId, secret: dec(x.razorKeySecret) }
   : (ENV_RZP_ID && ENV_RZP_SEC ? { id: ENV_RZP_ID, secret: ENV_RZP_SEC } : null);
 const ownerPublic = o => ({ id: o.id, restaurant: o.restaurant, status: o.status, features: o.features, gst: o.gst, upi: o.upi, menu: o.menu, tables: o.tables, razorpay: !!rzCreds(o) });
-const ownerPrivate = o => ({ ...ownerPublic(o), email: o.email, planId: o.planId, razorKeyId: o.razorKeyId, hasSecret: !!o.razorKeySecret, codes: o.codes, kitchenKey: o.kitchenKey });
+const ownerPrivate = o => ({ ...ownerPublic(o), email: o.email, planId: o.planId, razorKeyId: o.razorKeyId, hasSecret: !!o.razorKeySecret, codes: o.codes, kitchenKey: o.kitchenKey, feedKey: o.feedKey });
 const pubBill = b => ({ id: b.id, table: b.table, items: b.items, subtotal: b.subtotal, gstPct: b.gstPct, gst: b.gst, total: b.total, status: b.status, method: b.method, kitchen: b.kitchen, payClaim: b.payClaim, createdAt: b.createdAt, paidAt: b.paidAt });
-const fullBill = b => ({ ...pubBill(b), code: b.code, batches: b.batches });
+const fullBill = b => ({ ...pubBill(b), code: b.code, batches: b.batches, claimUtr: b.claimUtr || '' });
 
 const findOwner = id => { const o = db.owners.find(x => x.id === String(id)); if (!o) throw E('Restaurant not found', 404); return o; };
 const liveOwner = id => {
@@ -134,41 +209,94 @@ function createOwner(p, method, ref) {
   const o = {
     id: uid(4), email: p.email, hash: p.hash, pinHash: p.pinHash, restaurant: p.restaurant, planId: plan.id, status: 'live',
     features: { ...plan.features }, gst: 5, upi: '', razorKeyId: '', razorKeySecret: '', tables: 7, menu: [], codes: {},
-    kitchenKey: uid(6), createdAt: Date.now()
+    kitchenKey: uid(6), feedKey: uid(8), createdAt: Date.now()
   };
   db.owners.push(o); p.status = 'approved';
-  db.payments.push({ id: uid(4), kind: 'sub', ownerId: o.id, restaurant: o.restaurant, email: o.email, planName: plan.name, amount: plan.price, method, ref: ref || '', ts: Date.now() });
+  if (method !== 'MANUAL') db.payments.push({ id: uid(4), kind: 'sub', ownerId: o.id, restaurant: o.restaurant, email: o.email, planName: plan.name, amount: plan.price, method, ref: ref || '', ts: Date.now() });
   return o;
 }
+
+/* ---------- UTR auto-verification (matches customer UTR with real bank-credit records) ---------- */
+function parseSms(text) {
+  const t = String(text || '');
+  if (/debited|withdrawn/i.test(t) && !/credited|received/i.test(t)) return null; // ignore outgoing money
+  const utr = (t.match(/(?<!\d)\d{12}(?!\d)/) || [])[0];
+  if (!utr) return null;
+  let m = t.match(/(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  if (!m) m = t.replace(utr, ' ').match(/(\d[\d,]*(?:\.\d{1,2})?)/);
+  const amount = m ? parseFloat(m[1].replace(/,/g, '')) : NaN;
+  return amount > 0 ? { utr, amount } : null;
+}
+function addCredit(scope, utr, amount) {
+  if (db.credits.some(c => c.ownerId === scope && c.utr === utr)) return false;
+  db.credits.push({ id: uid(4), ownerId: scope, utr, amount: r2(amount), ts: Date.now(), used: '' });
+  return true;
+}
+function reconcile(scope) {
+  let n = 0;
+  for (const c of db.credits) {
+    if (c.ownerId !== scope || c.used) continue;
+    if (scope === 'admin') {
+      const p = db.pending.find(x => x.status === 'claimed' && x.utr === c.utr);
+      const pl = p && db.plans.find(x => x.id === p.planId);
+      if (p && pl && c.amount >= pl.price - 0.001) { try { createOwner(p, 'UPI', c.utr); c.used = p.id; n++; } catch (e) { /* e.g. email already exists */ } }
+    } else {
+      const o = db.owners.find(x => x.id === scope); if (!o) continue;
+      const bill = db.bills.find(x => x.ownerId === o.id && x.status === 'UNPAID' && x.claimUtr === c.utr);
+      if (bill && c.amount >= bill.total - 0.001) { settle(bill, o, 'UPI', c.utr); c.used = bill.id; n++; }
+    }
+  }
+  return n;
+}
+function ingest(scope, text) {
+  const t = String(text || '').slice(0, 5000);
+  const utrs = t.match(/(?<!\d)\d{12}(?!\d)/g) || [];
+  const chunks = utrs.length <= 1 ? [t] : t.split(/\n+/);
+  let added = 0;
+  for (const ch of chunks) { const p = parseSms(ch); if (p && addCredit(scope, p.utr, p.amount)) added++; }
+  return { added, matched: reconcile(scope) };
+}
+const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 
 /* ---------- app ---------- */
 const app = express();
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+const FORCE_HTTPS = process.env.FORCE_HTTPS === '1';
+app.use((req, res, next) => {
+  if (FORCE_HTTPS && !req.secure && req.path !== '/healthz') return res.redirect(301, 'https://' + req.headers.host + req.originalUrl);
+  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()' });
+  if (FORCE_HTTPS) res.set('Strict-Transport-Security', 'max-age=15552000');
+  if (String(req.path).startsWith('/api/')) res.set('Cache-Control', 'no-store');
+  next();
+});
 app.use(express.json({ limit: '200kb' }));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.get('/healthz', (req, res) => res.send('ok'));
+app.get('/healthz', (req, res) => res.send('ok - ' + BUILD));
 
-app.get('/api/config', (req, res) => res.json({ razorpay: !!(ENV_RZP_ID && ENV_RZP_SEC), keyId: ENV_RZP_ID, support: SUPPORT }));
+app.get('/api/config', (req, res) => res.json({ razorpay: !!(ENV_RZP_ID && ENV_RZP_SEC), keyId: ENV_RZP_ID, support: SUPPORT, build: BUILD }));
 
 app.get('/api/state', (req, res) => {
   const me = who(req), q = req.query;
   const base = {
-    now: Date.now(), support: SUPPORT,
+    now: Date.now(), support: SUPPORT, testMode: TEST_MODE,
     plans: db.plans.filter(p => p.status === 'live').map(({ id, name, price, desc, features }) => ({ id, name, price, desc, features })),
     pay: { upi: db.admin.upi, razorpay: !!rzCreds(db.admin) }
   };
   if (me && me.role === 'admin') {
     return res.json({
       ...base, role: 'admin', plans: db.plans,
+      storage: REMOTE ? 'redis' : (process.env.DATA_DIR ? 'disk' : ((process.env.RENDER || process.env.NODE_ENV === 'production') ? 'ephemeral' : 'local')),
       owners: db.owners.map(o => ({ id: o.id, email: o.email, restaurant: o.restaurant, planId: o.planId, status: o.status, features: o.features, createdAt: o.createdAt })),
-      admin: { email: db.admin.email, upi: db.admin.upi, razorKeyId: db.admin.razorKeyId, hasSecret: !!db.admin.razorKeySecret },
+      credits: db.credits.filter(c => c.ownerId === 'admin').slice(-30).reverse(),
+      admin: { feedKey: db.admin.feedKey, email: db.admin.email, upi: db.admin.upi, razorKeyId: db.admin.razorKeyId, hasSecret: !!db.admin.razorKeySecret },
       payments: db.payments.filter(p => p.kind === 'sub').sort((a, b) => b.ts - a.ts).slice(0, 100),
       pending: db.pending.filter(p => p.status === 'claimed').map(({ id, restaurant, email, planId, utr, ts }) => ({ id, restaurant, email, planId, utr, ts }))
     });
   }
   if (me && me.role === 'owner') {
     const o = findOwner(me.id);
-    return res.json({ ...base, role: 'owner', owner: ownerPrivate(o), bills: db.bills.filter(b => b.ownerId === o.id).map(fullBill) });
+    return res.json({ ...base, role: 'owner', owner: ownerPrivate(o), credits: db.credits.filter(c => c.ownerId === o.id).slice(-30).reverse(), bills: db.bills.filter(b => b.ownerId === o.id).map(fullBill) });
   }
   if (me && me.role === 'kitchen') {
     const o = findOwner(me.id);
@@ -199,18 +327,20 @@ const needKitchen = me => {
 };
 const needAdmin = me => { if (!me || me.role !== 'admin') throw E('Admin only', 401); };
 
-function act(b, me) {
+function act(b, me, ip) {
   const A = b.action;
   /* --- customer (public) --- */
   if (A === 'verifyCode') {
-    const o = liveOwner(b.owner), t = String(b.table), c = o.codes[t];
-    if (!(c && c.active && String(c.code) === String(b.code || '').trim())) throw E('Invalid or expired session code', 403);
+    const o = liveOwner(b.owner), t = String(b.table), c = o.codes[t], k = (ip || '') + ':vc:' + o.id + ':' + t;
+    if (limited(k)) throw E('Too many wrong codes. Please wait a few minutes.', 429);
+    if (!(c && c.active && String(c.code) === String(b.code || '').trim())) { failed(k); throw E('Invalid or expired session code', 403); }
     const bill = openBill(o, t, c.code);
     return { billId: bill ? bill.id : null };
   }
   if (A === 'placeOrder') {
-    const o = liveOwner(b.owner), t = String(b.table), c = o.codes[t];
-    if (!(c && c.active && String(c.code) === String(b.code || '').trim())) throw E('Session code is invalid or expired. Ask the staff for a new code.', 403);
+    const o = liveOwner(b.owner), t = String(b.table), c = o.codes[t], k = (ip || '') + ':vc:' + o.id + ':' + t;
+    if (limited(k)) throw E('Too many wrong codes. Please wait a few minutes.', 429);
+    if (!(c && c.active && String(c.code) === String(b.code || '').trim())) { failed(k); throw E('Session code is invalid or expired. Ask the staff for a new code.', 403); }
     const lines = Array.isArray(b.items) ? b.items.slice(0, 60) : [];
     if (!lines.length) throw E('Your cart is empty');
     const batch = { id: uid(4), ts: Date.now(), items: [], printed: false };
@@ -230,14 +360,24 @@ function act(b, me) {
       db.bills.push(bill);
     }
     add.forEach(a => { const ex = bill.items.find(i => i.id === a.id && i.size === a.size); if (ex) ex.qty += a.qty; else bill.items.push(a); });
-    bill.batches.push(batch); bill.kitchen = 'New'; bill.payClaim = '';
+    bill.batches.push(batch); bill.kitchen = 'New'; bill.payClaim = ''; bill.claimUtr = '';
     retotal(bill, o);
     return { billId: bill.id };
   }
   if (A === 'claimPay') {
     const o = findOwner(b.owner), bill = billOf(o, b.billId);
-    if (bill.status !== 'PAID') bill.payClaim = b.method === 'UPI' ? 'UPI' : 'CASH';
-    return {};
+    if (bill.status === 'PAID') return { matched: true };
+    if (b.method === 'UPI') {
+      const utr = String(b.utr || '').trim();
+      if (!/^\d{12}$/.test(utr)) throw E('Enter the 12-digit UPI transaction ID (UTR) from your payment app');
+      const k = (ip || '') + ':utr:' + o.id;
+      if (limited(k)) throw E('Too many attempts. Please wait a few minutes.', 429);
+      if (db.bills.some(x => x.ownerId === o.id && x.id !== bill.id && x.claimUtr === utr)) { failed(k); throw E('This UTR is already used for another bill'); }
+      bill.claimUtr = utr; bill.payClaim = 'UPI';
+      reconcile(o.id);
+      return { matched: bill.status === 'PAID' };
+    }
+    bill.payClaim = 'CASH'; return {};
   }
   /* --- owner --- */
   if (A === 'setTables') {
@@ -251,7 +391,7 @@ function act(b, me) {
     const gst = Number(b.gst); if (!(gst >= 0 && gst <= 40)) throw E('GST % must be between 0 and 40');
     const upi = String(b.upi || '').trim(); if (upi && !validUpi(upi)) throw E('Invalid UPI ID (example: name@bank)');
     o.restaurant = name; o.gst = gst; o.upi = upi; o.razorKeyId = String(b.razorKeyId || '').trim().slice(0, 60);
-    if (b.razorKeySecret && String(b.razorKeySecret).trim()) o.razorKeySecret = String(b.razorKeySecret).trim().slice(0, 80);
+    if (b.razorKeySecret && String(b.razorKeySecret).trim()) o.razorKeySecret = enc(String(b.razorKeySecret).trim().slice(0, 80));
     db.bills.filter(x => x.ownerId === o.id && x.status === 'UNPAID').forEach(x => retotal(x, o));
     return {};
   }
@@ -293,6 +433,10 @@ function act(b, me) {
     if (!me || (me.role !== 'owner' && me.role !== 'kitchen')) throw E('Not allowed', 401);
     db.printLogs.push({ id: uid(4), ownerId: me.id, table: String(b.table || ''), type: b.type === 'RECEIPT' ? 'RECEIPT' : 'KOT', ts: Date.now() }); return {};
   }
+  if (A === 'addCredits') {
+    const scope = (me && me.role === 'admin') ? 'admin' : needOwner(me).id;
+    return ingest(scope, b.text);
+  }
   /* --- admin --- */
   needAdmin(me);
   if (A === 'addPlan') {
@@ -322,7 +466,7 @@ function act(b, me) {
   if (A === 'adminSettings') {
     const upi = String(b.upi || '').trim(); if (upi && !validUpi(upi)) throw E('Invalid UPI ID (example: name@bank)');
     db.admin.upi = upi; db.admin.razorKeyId = String(b.razorKeyId || '').trim().slice(0, 60);
-    if (b.razorKeySecret && String(b.razorKeySecret).trim()) db.admin.razorKeySecret = String(b.razorKeySecret).trim().slice(0, 80);
+    if (b.razorKeySecret && String(b.razorKeySecret).trim()) db.admin.razorKeySecret = enc(String(b.razorKeySecret).trim().slice(0, 80));
     return {};
   }
   if (A === 'adminPassword') {
@@ -330,6 +474,21 @@ function act(b, me) {
     if (b.newPassword) { if (String(b.newPassword).length < 8) throw E('New password needs 8+ characters'); db.admin.hash = hash(b.newPassword); }
     if (b.newPin) { if (!/^\d{4,8}$/.test(String(b.newPin))) throw E('PIN must be 4-8 digits'); db.admin.pinHash = hash(b.newPin); }
     return { relogin: !!b.newPassword };
+  }
+  if (A === 'ownerPassword') {
+    const o = findOwner(b.id);
+    if (String(b.password || '').length < 6) throw E('Password needs 6+ characters');
+    o.hash = hash(b.password); return {};
+  }
+  if (A === 'addOwner') {
+    const email = String(b.email || '').trim().toLowerCase(), name = String(b.restaurant || '').trim();
+    if (name.length < 2 || name.length > 60) throw E('Enter the restaurant name');
+    if (!validEmail(email)) throw E('Enter a valid email');
+    if (String(b.password || '').length < 6) throw E('Password needs 6+ characters');
+    if (!/^\d{4,6}$/.test(String(b.pin || ''))) throw E('Recovery PIN must be 4-6 digits');
+    const plan = db.plans.find(x => x.id === b.planId); if (!plan) throw E('Choose a plan');
+    createOwner({ restaurant: name, email, hash: hash(b.password), pinHash: hash(b.pin), planId: plan.id }, 'MANUAL', '');
+    return {};
   }
   if (A === 'confirmSignup') {
     const p = db.pending.find(x => x.id === b.id && x.status === 'claimed'); if (!p) throw E('Signup not found', 404);
@@ -341,7 +500,7 @@ function act(b, me) {
 
 app.post('/api/state', (req, res) => {
   try {
-    const r = act(req.body || {}, who(req));
+    const r = act(req.body || {}, who(req), req.ip);
     save(); res.json({ ok: true, ...r });
   } catch (e) {
     if (e.http) return res.status(e.http).json({ error: e.message });
@@ -368,7 +527,13 @@ app.post('/api/auth/owner-login', (req, res) => {
   const b = req.body || {}, email = String(b.email || '').trim().toLowerCase(), k = req.ip + ':' + email;
   if (limited(k)) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
   const o = db.owners.find(x => x.email === email);
-  if (!o || !check(b.password, o.hash)) { failed(k); return res.status(401).json({ error: 'Invalid email or password' }); }
+  if (!o || !check(b.password, o.hash)) {
+    if (!o) {
+      const pd = db.pending.find(x => x.email === email && ['claimed', 'awaiting', 'rejected'].includes(x.status) && check(b.password, x.hash));
+      if (pd) return res.status(403).json({ error: pd.status === 'claimed' ? 'Aapka UPI payment admin confirm kar raha hai. Approval ke baad login chalega, support se baat karo.' : pd.status === 'rejected' ? 'Aapka payment confirm nahi hua. Support se baat karo.' : 'Subscription payment poora nahi hua. "New Subscribe" mein payment complete karo.' });
+    }
+    failed(k); return res.status(401).json({ error: 'Invalid email or password' });
+  }
   res.json(ownerTok(o));
 });
 app.post('/api/auth/owner-forgot', (req, res) => {
@@ -388,6 +553,7 @@ app.post('/api/auth/kitchen', (req, res) => {
 /* ---------- owner sign-up (account created only after payment) ---------- */
 app.post('/api/signup/start', (req, res) => {
   try {
+    const sk = req.ip + ':signup'; if (limited(sk)) throw E('Too many attempts. Try again later.', 429); failed(sk);
     const b = req.body || {}, email = String(b.email || '').trim().toLowerCase(), name = String(b.restaurant || '').trim();
     if (name.length < 2 || name.length > 60) throw E('Enter your restaurant name');
     if (!validEmail(email)) throw E('Enter a valid email');
@@ -395,6 +561,7 @@ app.post('/api/signup/start', (req, res) => {
     if (!/^\d{4,6}$/.test(String(b.pin || ''))) throw E('Recovery PIN must be 4-6 digits');
     const plan = db.plans.find(x => x.id === b.planId && x.status === 'live'); if (!plan) throw E('Choose a plan');
     if (db.owners.some(o => o.email === email)) throw E('This email is already registered. Please log in.');
+    if (db.pending.some(p => p.email === email && p.status === 'claimed')) throw E('Is email ka UPI payment admin confirmation ke liye pending hai. Thoda wait karo ya support se baat karo.');
     db.pending = db.pending.filter(p => !(p.email === email && p.status !== 'claimed'));
     const p = { id: uid(8), restaurant: name, email, hash: hash(b.password), pinHash: hash(b.pin), planId: plan.id, status: 'awaiting', utr: '', ts: Date.now() };
     db.pending.push(p); save(); res.json({ pendingId: p.id });
@@ -404,9 +571,26 @@ app.post('/api/signup/claim-upi', (req, res) => {
   const b = req.body || {}, p = db.pending.find(x => x.id === b.pendingId && x.status === 'awaiting');
   if (!p) return res.status(404).json({ error: 'Signup not found' });
   const utr = String(b.utr || '').trim();
-  if (utr.length < 6 || utr.length > 30) return res.status(400).json({ error: 'Enter the UPI transaction/UTR number' });
+  if (!/^\d{12}$/.test(utr)) return res.status(400).json({ error: 'Enter the 12-digit UPI transaction ID (UTR)' });
   if (!validUpi(db.admin.upi)) return res.status(503).json({ error: 'UPI payment is not available' });
-  p.status = 'claimed'; p.utr = utr; save(); res.json({ ok: true });
+  const k = req.ip + ':claimutr';
+  if (limited(k)) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  if (db.pending.some(x => x.id !== p.id && x.utr === utr)) { failed(k); return res.status(400).json({ error: 'This UTR is already used' }); }
+  p.status = 'claimed'; p.utr = utr;
+  reconcile('admin'); save();
+  if (p.status === 'approved') { const o = db.owners.find(x => x.email === p.email); return res.json({ ok: true, matched: true, ...ownerTok(o) }); }
+  res.json({ ok: true, matched: false });
+});
+app.post('/api/utr-feed', (req, res) => {
+  try {
+    const b = req.body || {}, k = req.ip + ':feed';
+    if (limited(k)) throw E('Too many attempts', 429);
+    const scope = String(b.owner || ''), holder = scope === 'admin' ? db.admin : db.owners.find(x => x.id === scope);
+    const key = b.key || req.get('x-feed-key') || '';
+    if (!holder || !holder.feedKey || !safeEq(key, holder.feedKey)) { failed(k); throw E('Invalid key', 401); }
+    const r = ingest(scope, b.text || (b.utr + ' ' + b.amount));
+    save(); res.json({ ok: true, ...r });
+  } catch (e) { res.status(e.http || 500).json({ error: e.message }); }
 });
 app.get('/api/signup/status', (req, res) => {
   const p = db.pending.find(x => x.id === String(req.query.id));
@@ -467,8 +651,39 @@ app.post('/api/verify-razorpay-payment', (req, res) => {
   } catch (e) { res.status(e.http || 500).json({ error: e.message }); }
 });
 
+/* ---------- TEST MODE only (env TEST_MODE=1): demo payments ---------- */
+app.post('/api/test/pay-signup', (req, res) => {
+  if (!TEST_MODE) return res.status(404).json({ error: 'Not available' });
+  try {
+    const p = db.pending.find(x => x.id === (req.body || {}).pendingId && (x.status === 'awaiting' || x.status === 'claimed'));
+    if (!p) throw E('Signup not found', 404);
+    const o = createOwner(p, 'TEST', 'test'); save(); res.json({ ok: true, ...ownerTok(o) });
+  } catch (e) { res.status(e.http || 500).json({ error: e.message }); }
+});
+app.post('/api/test/pay-bill', (req, res) => {
+  if (!TEST_MODE) return res.status(404).json({ error: 'Not available' });
+  try {
+    const b = req.body || {}, o = findOwner(b.owner), bill = billOf(o, b.billId);
+    settle(bill, o, 'TEST', 'test'); save(); res.json({ ok: true });
+  } catch (e) { res.status(e.http || 500).json({ error: e.message }); }
+});
+
 app.use((err, req, res, next) => res.status(400).json({ error: 'Bad request' }));
 
-load(); cleanup();
-setInterval(cleanup, 60 * 60 * 1000);
-app.listen(PORT, () => console.log('DigiRes running on http://localhost:' + PORT));
+process.on('SIGTERM', async () => {
+  try { if (REMOTE && db) await rcmd(['SET', 'digires_state', JSON.stringify(db)]); } catch (e) {}
+  process.exit(0);
+});
+function lanUrls() {
+  const os = require('os');
+  Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).forEach(i => console.log('  Phone (same WiFi): http://' + i.address + ':' + PORT));
+  console.log('  ' + BUILD + ' | open http://localhost:' + PORT + '/healthz to confirm this is the server you are talking to');
+  console.log('  Config: .env ' + (ENV_FILE ? 'found (' + ENV_FILE + ')' : 'not found') + ' | admin email: ' + db.admin.email);
+  if (process.env.NODE_ENV !== 'production' && !process.env.RENDER) console.log('  Admin login -> email: ' + db.admin.email + ' | ADMIN_PASSWORD from env: ' + (process.env.ADMIN_PASSWORD ? process.env.ADMIN_PASSWORD.length + ' characters' : 'not set'));
+  if (TEST_MODE) console.log('  TEST_MODE is ON: demo payments enabled');
+}
+(async () => {
+  await load(); cleanup();
+  setInterval(cleanup, 60 * 60 * 1000);
+  app.listen(PORT, () => { console.log('DigiRes running on http://localhost:' + PORT + ' | storage: ' + (REMOTE ? 'Upstash Redis' : process.env.DATA_DIR ? 'disk ' + DATA_DIR : 'TEMPORARY (set DATA_DIR disk or Upstash!)')); lanUrls(); });
+})();
